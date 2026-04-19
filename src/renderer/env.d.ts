@@ -14,6 +14,11 @@ declare global {
         getChannelInfo: (channelId: string) => Promise<any>
         getForumPosts: (channelId: string, offset?: number) => Promise<any>
         getAllForumPosts: (channelId: string) => Promise<any[]>
+        // Request cancellation of an in-progress full fetch started via getAllForumPosts.
+        cancelGetAllForumPosts: (channelId: string) => Promise<{ success: boolean; error?: string }>
+        // Subscribe to progress events for long-running forum fetches. Returns an
+        // unsubscribe function that removes the listener when called.
+        onForumPostsProgress: (callback: (progress: { count: number; total: number }) => void) => () => void
         getThreadMessages: (threadId: string) => Promise<any[]>
         getGuild: (guildId: string) => Promise<any>
         getGuildIcon: (guildId: string, hash: string | null) => Promise<string | null>

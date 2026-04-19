@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import type { ChannelTypeFilters } from '../channelFilters'
+import { showToast } from '../components/Toast'
 
 interface Guild {
   id: string
@@ -56,6 +57,8 @@ interface BrowserState {
   loadingGuilds: boolean
   loadingChannels: boolean
   loadingPosts: boolean
+  postsProgressCount: number
+  postsProgressTotal: number
   restrictedChannels: Set<string>
   searchQuery: string
   totalPosts: number
@@ -66,6 +69,7 @@ interface BrowserState {
   fetchGuilds: () => Promise<void>
   fetchChannels: (guildId: string) => Promise<void>
   fetchPosts: (channelId: string) => Promise<void>
+  cancelFetchPosts: (channelId: string) => Promise<void>
   selectGuild: (guild: Guild) => void
   selectChannel: (channel: Channel) => void
   togglePostSelection: (threadId: string) => void
@@ -110,6 +114,8 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   guilds: [],
   channels: [],
   posts: [],
+  postsProgressCount: 0,
+  postsProgressTotal: 0,
   selectedGuild: null,
   selectedChannel: null,
   selectedPosts: new Set(),
@@ -171,13 +177,26 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   },
 
   fetchPosts: async (channelId: string) => {
-    set({ loadingPosts: true, posts: [], selectedPosts: new Set() })
+    // Reset state and start listening for progress events. We subscribe to
+    // the progress events exposed by the preload bridge and ensure the
+    // listener is removed when the fetch finishes, fails or is cancelled.
+    set({ loadingPosts: true, posts: [], selectedPosts: new Set(), postsProgressCount: 0, postsProgressTotal: 0 })
+    const unsubscribeProgress = window.api.discord.onForumPostsProgress((data: any) => {
+      try {
+        set({ postsProgressCount: data.count || 0, postsProgressTotal: data.total || 0 })
+      } catch { /* ignore */ }
+    })
+
     try {
       const posts = await window.api.discord.getAllForumPosts(channelId)
-      set({ posts, loadingPosts: false, totalPosts: posts.length })
+      set({ posts, loadingPosts: false, totalPosts: posts.length, postsProgressCount: 0, postsProgressTotal: 0 })
     } catch (error: any) {
       console.error('Failed to fetch posts:', error)
-      if (error.message?.includes('403') || error.message?.toLowerCase().includes('access denied')) {
+      // If the renderer requested cancellation, the main process rejects
+      // with a 'cancelled' error. Treat as non-fatal and stop loading.
+      if (error?.message === 'cancelled') {
+        set({ loadingPosts: false })
+      } else if (error.message?.includes('403') || error.message?.toLowerCase().includes('access denied')) {
         set(state => {
           const next = new Set(state.restrictedChannels)
           next.add(channelId)
@@ -186,6 +205,25 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       } else {
         set({ loadingPosts: false })
       }
+    } finally {
+      try { unsubscribeProgress() } catch {}
+    }
+  },
+
+  // Request cancellation of an in-progress fetch. This calls into the main
+  // process which flips a cooperative token; the in-progress client will
+  // abort at the next convenient check. We keep this method simple and
+  // resilient — it never throws to the UI.
+  cancelFetchPosts: async (channelId: string) => {
+    try {
+      const res = await window.api.discord.cancelGetAllForumPosts(channelId)
+      if (res && res.success) {
+        try { showToast('Carga cancelada', 'info') } catch { console.info('Carga cancelada') }
+      }
+    } catch (err) {
+      console.warn('[Store] cancelFetchPosts failed', err)
+    } finally {
+      set({ loadingPosts: false, postsProgressCount: 0, postsProgressTotal: 0 })
     }
   },
 

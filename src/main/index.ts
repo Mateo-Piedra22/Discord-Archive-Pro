@@ -27,6 +27,10 @@ let tray: Tray | null = null
 let discordClient: DiscordClient | null = null
 let downloadManager: DownloadManager | null = null
 let isQuitting = false
+// Map to track cooperative cancellation tokens for long-running forum fetches.
+// Keyed by channelId so renderer can request cancellation of a specific channel
+// fetch without affecting others.
+const forumFetchCancellation = new Map<string, { cancelled?: boolean }>()
 
 // Ensure single instance
 const gotTheSingleInstanceLock = app.requestSingleInstanceLock()
@@ -378,9 +382,38 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('discord:get-all-forum-posts', async (_event, channelId: string) => {
     if (!discordClient) throw new Error('Not authenticated')
-    return discordClient.getAllForumPosts(channelId, (count, total) => {
-      mainWindow?.webContents.send('forum-posts-progress', { count, total })
-    })
+
+    // Create and register a cancellation token for this channel fetch
+    const token = { cancelled: false }
+    forumFetchCancellation.set(channelId, token)
+
+    try {
+      return await discordClient.getAllForumPosts(channelId, (count, total) => {
+        // Forward progress to renderer so the UI can render a progress bar.
+        mainWindow?.webContents.send('forum-posts-progress', { count, total })
+      }, token)
+    } catch (err: any) {
+      // Normalize cancellation error so renderer can detect it if needed.
+      if (err && err.message === 'fetch_cancelled') {
+        // Clean up and surface a friendly cancellation error.
+        return Promise.reject(new Error('cancelled'))
+      }
+      throw err
+    } finally {
+      // Ensure token is removed once finished/errored/cancelled
+      forumFetchCancellation.delete(channelId)
+    }
+  })
+
+  // IPC: cancel a long-running forum fetch for a given channelId. This flips
+  // the cooperative cancellation token so the in-progress `getAllForumPosts`
+  // call can abort at the next convenient check.
+  ipcMain.handle('discord:cancel-get-all-forum-posts', async (_event, channelId: string) => {
+    const token = forumFetchCancellation.get(channelId)
+    if (!token) return { success: false, error: 'no_active_fetch' }
+    token.cancelled = true
+    // Keep token in map until the operation cleans up in its finally block.
+    return { success: true }
   })
 
   ipcMain.handle('discord:get-thread-messages', async (_event, threadId: string) => {

@@ -63,6 +63,7 @@ All exports are **self-contained, offline-readable, and beautifully formatted**.
 
 | Browse View | Downloads Panel | Archive Viewer |
 |:-----------:|:----------------:|:--------------:|
+| ![Browse View](resources/screenshots/explorer.png) | ![Downloads Panel](resources/screenshots/downloads.png) | ![Archive Viewer](resources/screenshots/viewer.png) |
 | Navigate guilds, forums, and channels with Discord's exact dark palette | Real-time download queue with phase-by-phase progress logging | Tree-based file explorer with live Markdown, HTML and image preview |
 
 </div>

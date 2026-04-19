@@ -173,9 +173,15 @@ export class DiscordClient {
     return this.request<ArchivedThreadsResponse>('GET', url, `threads:archived:${channelId}`)
   }
 
+  // Enhanced: support a lightweight cancellation token so long-running
+  // forum fetches can be aborted from the main process. This keeps the
+  // client fully synchronous (no extra threads) while still allowing
+  // cooperative cancellation checks between network calls.
   async getAllForumPosts(
     channelId: string,
-    onProgress?: (count: number, total: number) => void
+    onProgress?: (count: number, total: number) => void,
+    // cancellation token shape: simple mutable object checked periodically
+    cancellationToken?: { cancelled?: boolean }
   ): Promise<ForumPost[]> {
     const channel = await this.getChannel(channelId)
 
@@ -219,6 +225,11 @@ export class DiscordClient {
 
     // Fetch active threads via search
     while (true) {
+      // Cooperative cancellation check: if cancelled, stop cleanly.
+      if (cancellationToken && cancellationToken.cancelled) {
+        // Throw a specific error so callers can detect cancellation.
+        throw new Error('fetch_cancelled')
+      }
       const result = await this.searchForumThreads(channelId, {
         sort_by: 'creation_time',
         sort_order: 'desc',
@@ -230,6 +241,9 @@ export class DiscordClient {
       if (onProgress) onProgress(allPosts.length, total)
 
       for (const thread of result.threads) {
+        if (cancellationToken && cancellationToken.cancelled) {
+          throw new Error('fetch_cancelled')
+        }
         const postTags = (thread.applied_tags || [])
           .map(tagId => tagMap.get(tagId))
           .filter((t): t is ForumTag => t !== undefined)

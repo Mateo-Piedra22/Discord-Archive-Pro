@@ -321,7 +321,8 @@ export default function PostList() {
   const {
     posts, selectedPosts, selectedChannel, loadingPosts,
     togglePostSelection, selectAllPosts, deselectAllPosts,
-    searchQuery, setSearchQuery, selectedGuild
+    searchQuery, setSearchQuery, selectedGuild,
+    postsProgressCount, postsProgressTotal, cancelFetchPosts
   } = useBrowserStore()
   const { startDownload, outputDir, pickDirectory } = useDownloadStore()
   const [tagFilter, setTagFilter] = useState<string | null>(null)
@@ -344,12 +345,44 @@ export default function PostList() {
   }
 
   if (loadingPosts) {
+    const total = postsProgressTotal || 0
+    const count = postsProgressCount || 0
+    const percent = total > 0 ? Math.round((count / total) * 100) : undefined
+
     return (
       <div className="panel">
         <div className="panel__pad">
-          <div style={{ color: 'var(--text-muted)', fontSize: 'var(--font-sm)', textAlign: 'center', padding: '12px 0' }}>
-            Cargando publicaciones…
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ color: 'var(--text-muted)', fontSize: 'var(--font-sm)', padding: '12px 0' }}>
+              Cargando publicaciones…
+              {typeof percent === 'number' && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>{count} / {total} ({percent}%)</div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="btn btn--ghost btn--xs"
+                onClick={() => {
+                  if (selectedChannel) cancelFetchPosts(selectedChannel.id)
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="btn btn--ghost btn--xs"
+                onClick={() => {
+                  if (selectedChannel) {
+                    // Retry: re-trigger fetch; store handles progress subscription
+                    useBrowserStore.getState().fetchPosts(selectedChannel.id)
+                  }
+                }}
+              >
+                Reintentar
+              </button>
+            </div>
           </div>
+
           {[1, 2, 3, 4].map(i => <div key={i} className="skeleton skeleton--card" />)}
         </div>
       </div>

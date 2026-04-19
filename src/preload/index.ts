@@ -25,6 +25,16 @@ const api = {
       ipcRenderer.invoke('discord:get-forum-posts', channelId, offset),
     getAllForumPosts: (channelId: string) =>
       ipcRenderer.invoke('discord:get-all-forum-posts', channelId),
+    // Allow renderer to request cancellation of an in-progress full fetch.
+    cancelGetAllForumPosts: (channelId: string) => ipcRenderer.invoke('discord:cancel-get-all-forum-posts', channelId),
+    // Progress events for long-running forum fetches. We expose a helper
+    // that registers the callback and returns an unsubscribe function so
+    // consumers can avoid leaking listeners.
+    onForumPostsProgress: (callback: (progress: { count: number; total: number }) => void) => {
+      const handler = (_e: any, data: any) => callback(data)
+      ipcRenderer.on('forum-posts-progress', handler)
+      return () => ipcRenderer.removeListener('forum-posts-progress', handler)
+    },
     getThreadMessages: (threadId: string) =>
       ipcRenderer.invoke('discord:get-thread-messages', threadId),
     getGuild: (guildId: string) =>
