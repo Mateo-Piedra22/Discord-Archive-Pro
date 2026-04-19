@@ -1,0 +1,54 @@
+:root {
+  /* Palette — Discord style dark mode */
+  --bg-0: #1e1f22; /* Discord app background */
+  --bg-1: #2b2d31; /* Discord sidebar background */
+  --bg-2: #313338; /* Discord chat background */
+  --bg-3: #383a40;
+  --bg-4: #404249;
+  --bg-hover: #3f4147;
+
+  --text-0: #f2f3f5;
+  --text-1: #dbdee1;
+  --text-2: #b5bac1;
+  --text-3: #949ba4;
+
+  /* Discord Blurple accent */
+  --accent: #5865F2;
+  --accent-dim: rgba(88, 101, 242, 0.15);
+  --accent-text: #7289da;
+
+  --green: #23a559;
+  --amber: #f0b232;
+  --red: #da373c;
+  --blue: #00a8fc;
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-focus: rgba(88, 101, 242, 0.5);
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px; /* More Discord-like */
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  --font: 'gg sans', 'Inter', 'Whitney', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+
+  --font-xs: 0.75rem;
+  --font-sm: 0.85rem;
+  --font-base: 0.95rem;
+  --font-md: 1.05rem;
+  --font-lg: 1.25rem;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 200ms;
+  --dur-slow: 300ms;
+
+  /* Premium Gradients */
+  --grad-premium: linear-gradient(135deg, #5865F2 0%, #4752c4 100%);
+  --grad-glass: linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+}
+

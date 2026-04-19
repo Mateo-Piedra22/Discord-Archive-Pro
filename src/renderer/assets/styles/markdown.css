@@ -1,0 +1,201 @@
+.markdown-body {
+  font-family: var(--font);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--text-0);
+  background: var(--bg-0);
+  padding: 30px;
+  width: 100%;
+  max-width: 1100px; /* Wider for tables */
+  margin: 0 auto;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-0);
+}
+
+.markdown-body h1 { font-size: 1.8rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h3 { font-size: 1.25rem; }
+
+.markdown-body p,
+.markdown-body blockquote,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body dl,
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0;
+  margin-bottom: 24px;
+  background: rgba(255, 255, 255, 0.01);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown-body table th {
+  background: var(--bg-1);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+
+.markdown-body table tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.markdown-body table tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.markdown-body pre,
+.markdown-body details {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: var(--text-2);
+  border-left: 0.25em solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+}
+
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  background-color: var(--bg-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.markdown-body pre {
+  padding: 16px;
+  overflow: auto;
+  font-size: 85%;
+  line-height: 1.45;
+  background-color: var(--bg-1);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.markdown-body pre code {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  background-color: transparent;
+  border: 0;
+}
+
+.markdown-body a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  box-sizing: content-box;
+  background-color: transparent;
+  border-radius: var(--radius-sm);
+}
+
+.markdown-body hr {
+  height: 0.25em;
+  padding: 0;
+  margin: 24px 0;
+  background-color: var(--border);
+  border: 0;
+}
+
+/* Toggle Styles */
+.view-toggle {
+  display: inline-flex;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  margin-right: 12px;
+}
+
+.view-toggle__btn {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: var(--font-xs);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--dur);
+}
+
+.view-toggle__btn:hover {
+  color: var(--text-0);
+}
+
+.view-toggle__btn--active {
+  background: var(--bg-4);
+  color: var(--text-0);
+  box-shadow: var(--shadow-sm);
+}
+
+.preview-text__actions {
+  display: flex;
+  align-items: center;
+}
+
+.preview-text__filename {
+  font-weight: 600;
+  font-size: var(--font-sm);
+}
+
+.source-code {
+  margin: 0;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-1);
+  background: var(--bg-1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-text__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  font-size: var(--font-sm);
+  color: var(--text-1);
+}
