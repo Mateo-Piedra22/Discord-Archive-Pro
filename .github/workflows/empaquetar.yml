@@ -40,6 +40,10 @@ jobs:
           npm run typecheck
           npm test
 
+      # electron-builder empaqueta `out/`, así que primero hay que compilar.
+      - name: Compilar
+        run: npm run build
+
       - name: Empaquetar
         run: npx electron-builder --win portable --publish never
 
