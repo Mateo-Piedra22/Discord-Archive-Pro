@@ -1,44 +1,47 @@
 // ============================================================
-// Deduplicator — SHA-256 hash-based deduplication to avoid
-// re-downloading the same files across posts.
+// Deduplicador — evita volver a descargar el mismo adjunto.
+// IMPORTANTE: solo deduplica dentro del MISMO post. Reutilizar un
+// archivo de otro post obligaría a rutas absolutas en los exports
+// (enlaces rotos al mover la carpeta y fuga de rutas del usuario).
 // ============================================================
 
-import * as db from '../storage/database'
+import fs from 'fs'
+import path from 'path'
+import { getCachedFile } from '../storage/database'
 
 export class Deduplicator {
-  // In-memory lookup for current session
-  private sessionMap = new Map<string, string>() // fileId -> localRelativePath
+  private session = new Map<string, string>() // fileId -> ruta relativa
 
-  check(fileId: string, fileSize: number): string | null {
-    // Check session cache first
-    const sessionHit = this.sessionMap.get(fileId)
-    if (sessionHit) return sessionHit
+  /**
+   * Devuelve la ruta relativa (assets/...) si el archivo ya existe
+   * dentro de este post, o null si hay que descargarlo.
+   */
+  check(fileId: string, postDir: string): string | null {
+    const sessionHit = this.session.get(fileId)
+    if (sessionHit && this.existsInPost(postDir, sessionHit)) return sessionHit
 
-    // Check database
-    const cached = db.getCachedFile(fileId)
-    if (cached && cached.still_valid) {
-      // Verify local file still exists
-      const fs = require('fs')
-      if (fs.existsSync(cached.local_path)) {
-        return cached.local_path
-      }
-    }
+    const cached = getCachedFile(fileId)
+    if (!cached || !cached.still_valid) return null
+    if (!fs.existsSync(cached.local_path)) return null
 
-    return null
+    // Solo vale si el archivo vive dentro de este post.
+    const relative = path.relative(postDir, cached.local_path)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return null
+
+    const posix = relative.split(path.sep).join('/')
+    this.session.set(fileId, posix)
+    return posix
   }
 
-  record(fileId: string, fileSize: number, relativePath: string): void {
-    this.sessionMap.set(fileId, relativePath)
-  }
-
-  getStats(): { totalDeduplicated: number; bytesSaved: number } {
-    return {
-      totalDeduplicated: this.sessionMap.size,
-      bytesSaved: 0 // Would need size tracking for accurate number
-    }
+  record(fileId: string, relativePath: string): void {
+    this.session.set(fileId, relativePath)
   }
 
   clear(): void {
-    this.sessionMap.clear()
+    this.session.clear()
+  }
+
+  private existsInPost(postDir: string, relativePath: string): boolean {
+    return fs.existsSync(path.join(postDir, relativePath.split('/').join(path.sep)))
   }
 }

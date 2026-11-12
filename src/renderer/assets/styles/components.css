@@ -1,0 +1,2431 @@
+/* ============================================================
+   Componentes — barra de título, riel, botones, campos,
+   tarjetas, listas, estados vacíos, progreso y avisos.
+   ============================================================ */
+
+/* ==================== Barra de título ==================== */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: var(--titlebar-h);
+  padding-left: var(--sp-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line-soft);
+  -webkit-app-region: drag;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.titlebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg-2);
+}
+
+.titlebar__brand img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  opacity: 0.95;
+}
+
+.titlebar__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: var(--sp-4);
+  padding-left: var(--sp-4);
+  border-left: 1px solid var(--line-soft);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.titlebar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.titlebar__spacer {
+  flex: 1;
+}
+
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.wc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  color: var(--fg-3);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.wc:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.wc--close:hover {
+  background: var(--err);
+  color: #fff;
+}
+
+/* Punto de estado reutilizable */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--fg-4);
+  flex-shrink: 0;
+}
+
+.dot--ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+.dot--warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+
+.dot--err {
+  background: var(--err);
+  box-shadow: 0 0 0 3px var(--err-soft);
+}
+
+.dot--busy {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* ==================== Riel de navegación ==================== */
+
+/* El riel ocupa todo el alto del armazón y es su propio scroller:
+   nunca empuja al resto de la ventana. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-3) 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--line-soft);
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  flex-shrink: 0;
+}
+
+.rail__brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--sp-4);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.rail__brand img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rail__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 60px;
+  padding: 9px 0 7px;
+  border-radius: var(--r-lg);
+  color: var(--fg-3);
+  flex-shrink: 0;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.rail__item:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+
+.rail__item--active {
+  color: var(--accent-fg);
+  background: var(--accent-soft);
+}
+
+.rail__item--active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 20px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+
+.rail__label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rail__badge {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--ink-950);
+  background: var(--accent);
+  border-radius: var(--r-full);
+}
+
+.rail__spacer {
+  flex: 1;
+}
+
+/* Alineado con el ancho de los ítems: el divisor no queda «cojo». */
+.rail__foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 60px;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* ==================== Botones ==================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  color: #1a1206;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn--primary:active:not(:disabled) {
+  background: var(--accent-press);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-2);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--line-soft);
+  color: var(--fg);
+}
+
+.btn--danger {
+  color: var(--err);
+  background: var(--err-soft);
+  border-color: transparent;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--err);
+  color: #fff;
+}
+
+.btn--sm {
+  height: 27px;
+  padding: 0 9px;
+  font-size: var(--text-sm);
+}
+
+.btn--icon {
+  width: 30px;
+  padding: 0;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+/* ==================== Campos ==================== */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.field__hint {
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  line-height: 1.45;
+}
+
+.input,
+.select {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--fg);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.input::placeholder {
+  color: var(--fg-4);
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--line-strong);
+}
+
+.input:focus,
+.select:focus {
+  border-color: var(--accent-line);
+  background: var(--surface-1);
+  box-shadow: none;
+}
+
+.input--search {
+  padding-left: 30px;
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search__icon {
+  position: absolute;
+  left: 9px;
+  color: var(--fg-4);
+  pointer-events: none;
+}
+
+.select {
+  appearance: none;
+  padding-right: 26px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 14px, calc(100% - 9px) 14px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+/* Interruptor */
+.switch {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  border-radius: var(--r-full);
+  background: var(--ink-650);
+  border: 1px solid var(--line);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  flex-shrink: 0;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--r-full);
+  background: var(--fg-3);
+  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.switch--on {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.switch--on::after {
+  transform: translateX(17px);
+  background: var(--accent);
+}
+
+/* Casilla */
+.checkbox {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: transparent;
+  transition: all var(--dur-fast) var(--ease);
+  flex-shrink: 0;
+}
+
+.checkbox--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1206;
+}
+
+/* Selector numérico */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.stepper__btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+}
+
+.stepper__btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.stepper__btn:disabled {
+  opacity: 0.35;
+}
+
+.stepper__value {
+  min-width: 42px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== Tarjetas y secciones ==================== */
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.card__title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.card__body {
+  padding: var(--sp-4);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.section__title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 52px;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* El bloque de texto nunca empuja al control de la derecha. */
+.setting-row > :first-child {
+  min-width: 0;
+}
+
+.setting-row:last-child {
+  border-bottom: 0;
+}
+
+.setting-row:hover {
+  background: var(--surface-2);
+}
+
+.setting-row__label {
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.setting-row__hint {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--fg-3);
+  margin-top: 1px;
+  overflow-wrap: anywhere;
+}
+
+/* ==================== Chips y badges ==================== */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: all var(--dur-fast) var(--ease);
+}
+
+.chip:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+
+.chip--active {
+  color: var(--accent-fg);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 6px;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+.badge--ok { background: var(--ok-soft); color: var(--ok); }
+.badge--warn { background: var(--warn-soft); color: var(--warn); }
+.badge--err { background: var(--err-soft); color: var(--err); }
+.badge--info { background: var(--info-soft); color: var(--info); }
+.badge--accent { background: var(--accent-soft); color: var(--accent-fg); }
+
+/* ==================== Listas ==================== */
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 40px;
+  padding: 9px var(--sp-3);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.list__row:hover {
+  background: var(--surface-2);
+}
+
+.list__row--active {
+  background: var(--accent-soft);
+}
+
+.list__row--active .list__name {
+  color: var(--accent-fg);
+}
+
+/* El nombre absorbe el espacio libre: la meta y los botones quedan
+   siempre a la derecha, sin que el texto los empuje. */
+.list__name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list__meta {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== Estado vacío ==================== */
+
+/* Centrado óptico: `flex: 1` lo centra en contenedores flex y las
+   reglas siguientes dan altura a los padres de bloque habituales. */
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 0;
+  padding: var(--sp-8) var(--sp-6);
+  text-align: center;
+  align-self: stretch;
+}
+
+/* Vistas que no son flex: el relleno de vista ocupa el alto disponible
+   para que el estado vacío no quede pegado arriba. */
+.workspace__body > .view-pad,
+.workspace__body > .view-pad--tight {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* El chat es un flex column: el vacío rellena y se centra. */
+.chat__scroll > .empty {
+  flex: 1;
+}
+
+/* Sección que solo contiene un vacío: ocupa el alto restante para
+   que el mensaje quede centrado bajo las pestañas, no pegado a ellas. */
+.workspace__body > .view-pad > .section:has(> .empty) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.empty__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  color: var(--fg-3);
+}
+
+.empty__title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.empty__text {
+  max-width: 380px;
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+
+/* ==================== Progreso ==================== */
+
+.progress {
+  height: 4px;
+  width: 100%;
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-full);
+  transition: width var(--dur-slow) var(--ease);
+}
+
+.progress__fill--indeterminate {
+  width: 35% !important;
+  animation: slide 1.4s var(--ease) infinite;
+}
+
+@keyframes slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* ==================== Avisos (toasts) ==================== */
+
+.toast-container {
+  position: fixed;
+  bottom: var(--sp-5);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  z-index: 90;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 9px var(--sp-4);
+  font-size: var(--text-md);
+  color: var(--fg);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+  animation: toast-in var(--dur-slow) var(--ease);
+}
+
+.toast--success { border-color: rgba(86, 163, 119, 0.4); }
+.toast--error { border-color: rgba(194, 92, 88, 0.45); }
+.toast--warning { border-color: rgba(201, 162, 39, 0.45); }
+
+.toast__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.toast--success .toast__icon { background: var(--ok-soft); color: var(--ok); }
+.toast--error .toast__icon { background: var(--err-soft); color: var(--err); }
+.toast--warning .toast__icon { background: var(--warn-soft); color: var(--warn); }
+.toast--info .toast__icon { background: var(--info-soft); color: var(--info); }
+
+.toast--exiting {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==================== Esqueletos ==================== */
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--r-md);
+}
+
+.skeleton--row { height: 34px; }
+.skeleton--card { height: 92px; }
+
+@keyframes shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ==================== Tablas ==================== */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-md);
+}
+
+/* Cabecera y celdas comparten relleno vertical: las columnas quedan
+   alineadas aunque el rótulo ocupe dos líneas. */
+.table th {
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 9px var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-2);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tr:hover td {
+  background: var(--surface-2);
+}
+
+/* ==================== Paneles divididos ==================== */
+
+.split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.split__side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-1);
+  flex-shrink: 0;
+}
+
+.split__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* Es el único scroller del panel derecho y, además, una columna flex:
+   así el estado vacío se centra y la cabecera no se mueve. */
+.split__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2);
+  min-height: 0;
+}
+
+/* Cuerpos de vista que ya traen su propio scroller: el armazón no
+   vuelve a desplazarse (evita el doble scroll que arrastraba todo). */
+.workspace__body:has(> .chat__scroll),
+.workspace__body:has(> .split) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ==================== Capas superpuestas ==================== */
+
+.scrim {
+  position: fixed;
+  inset: var(--titlebar-h) 0 0 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(6, 7, 9, 0.78);
+  animation: aparecer var(--dur) var(--ease);
+}
+
+.scrim--centro {
+  align-items: center;
+  padding-top: 0;
+}
+
+.dialogo {
+  width: min(620px, calc(100vw - 48px));
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: brotar var(--dur) var(--ease);
+}
+
+/* Resultados del buscador: el diálogo recorta, así que la lista
+   necesita su propio scroll o el final queda inalcanzable. */
+.dialogo > .list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2);
+}
+
+/* Cajón lateral: altura fija por `top/bottom`; el scroll vive dentro. */
+.cajon {
+  position: fixed;
+  top: var(--titlebar-h);
+  right: 0;
+  bottom: 0;
+  z-index: 80;
+  width: min(760px, 94vw);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-0);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-md);
+  animation: deslizar var(--dur-slow) var(--ease);
+}
+
+@keyframes aparecer {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes brotar {
+  from { opacity: 0; transform: translateY(-6px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes deslizar {
+  from { opacity: 0.5; transform: translateX(28px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ==================== Mensajes (visor en vivo) ==================== */
+
+/* El hilo crece con su contenido: no se comprime dentro del scroller. */
+.hilo {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+  padding-bottom: var(--sp-6);
+}
+
+.msg {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: var(--sp-3);
+  padding: 5px var(--sp-5);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.msg:hover {
+  background: var(--surface-1);
+}
+
+/* Sin `min-width: 0` una URL o un adjunto ancho desborda la rejilla
+   y desalinea toda la columna de texto. */
+.msg > * {
+  min-width: 0;
+}
+
+.msg--agrupado {
+  padding-top: 1px;
+}
+
+.msg__avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-full);
+  object-fit: cover;
+  background: var(--surface-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--fg-2);
+  flex-shrink: 0;
+}
+
+.msg__autor {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.msg__hora {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.msg__texto {
+  font-size: var(--text-base);
+  line-height: 1.62;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg__adjuntos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.msg__img {
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-soft);
+  object-fit: cover;
+}
+
+.msg__reacciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.reaccion {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-full);
+}
+
+.separador-dia {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.separador-dia::before,
+.separador-dia::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+/* ==================== Paleta de comandos ==================== */
+
+.paleta__campo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.paleta__lista {
+  overflow: auto;
+  padding: var(--sp-2);
+  max-height: 52vh;
+}
+
+.paleta__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 8px var(--sp-4) 8px var(--sp-3);
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  text-align: left;
+}
+
+.paleta__item--activo {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.paleta__grupo {
+  padding: var(--sp-2) var(--sp-3) 4px;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+}
+
+/* ==================== Métricas ==================== */
+
+.metrica {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2px;
+  min-height: 84px;
+  padding: var(--sp-4);
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.metrica__valor {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.metrica__etiqueta {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.barra-horizontal {
+  display: flex;
+  height: 8px;
+  border-radius: var(--r-full);
+  overflow: hidden;
+  background: var(--surface-3);
+}
+
+.barra-horizontal__parte {
+  height: 100%;
+}
+
+/* ============================================================
+   Chat de canal, mensajes enriquecidos, medios, embeds y visor.
+   Bloque añadido al final: amplía lo anterior sin redefinirlo.
+   ============================================================ */
+
+/* ==================== Chat de canal ==================== */
+
+/* Área desplazable del historial: es el scroller real del chat.
+   Columna flex para que el vacío se centre; sin `height: 100%` fijo,
+   que competía con el alto que da el padre. */
+.chat__scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
+}
+
+/* El botón «Ir al final» flota sobre el historial: se reserva su
+   hueco para que nunca tape el último mensaje. */
+.workspace__body:has(> .chat__salto) > .chat__scroll {
+  padding-bottom: calc(var(--sp-6) + 44px);
+}
+
+/* Franja de aviso del canal. Queda pegada arriba al desplazar. */
+.chat__banner {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  background: var(--surface-0);
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  text-align: center;
+  animation: subir var(--dur) var(--ease) both;
+}
+
+/* Botón «Ir al final»: hermano del scroller, anclado a la ventana.
+   Lleva texto, así que es una píldora y no un círculo. */
+.chat__salto {
+  position: fixed;
+  right: var(--sp-6);
+  bottom: var(--sp-6);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-full);
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.chat__salto:hover {
+  color: var(--fg);
+  background: var(--surface-3);
+  border-color: var(--line-strong);
+}
+
+/* ==================== Acciones por mensaje ==================== */
+
+/* El mensaje ya es una rejilla; solo necesita el anclaje. */
+.msg {
+  position: relative;
+}
+
+/* Autor y hora en la primera línea del bloque. */
+.msg__linea {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* Barra de acciones: oculta hasta hover o foco dentro del mensaje.
+   Los botones internos ya son .btn--ghost, no hace falta estilo propio. */
+.msg__acciones {
+  position: absolute;
+  top: 2px;
+  right: var(--sp-5);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  transform: translateY(2px);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.msg:hover .msg__acciones,
+.msg:focus-within .msg__acciones {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* Cita del mensaje respondido. */
+.msg__respuesta {
+  margin-bottom: 2px;
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--line);
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==================== Medios ==================== */
+
+/* El marco va en la imagen; el contenedor solo aporta el cursor. */
+.media {
+  display: block;
+  max-width: 100%;
+  cursor: zoom-in;
+}
+
+.media__img {
+  display: block;
+  max-width: 420px;
+  max-height: 320px;
+  object-fit: cover;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-soft);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.media:hover .media__img {
+  border-color: var(--accent);
+}
+
+/* Vídeo y audio van sueltos dentro de .msg__adjuntos. */
+.media__video {
+  display: block;
+  max-width: 420px;
+  max-height: 320px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-soft);
+  background: var(--ink-950);
+}
+
+.media__audio {
+  width: 100%;
+  max-width: 320px;
+  height: 32px;
+}
+
+/* ==================== Embeds ==================== */
+
+.embed {
+  position: relative;
+  display: flex;
+  gap: var(--sp-3);
+  max-width: min(520px, 100%);
+  margin-top: 6px;
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/* Franja de color del embed; el color llega en línea. */
+.embed__barra {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.embed__cuerpo {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: var(--sp-2);
+  min-width: 0;
+}
+
+.embed__proveedor {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-3);
+}
+
+.embed__autor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.embed__autor a {
+  color: inherit;
+}
+
+.embed__autor a:hover {
+  color: var(--fg);
+}
+
+.embed__autor-icono {
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.embed__titulo {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--accent-fg);
+  overflow-wrap: anywhere;
+}
+
+a.embed__titulo:hover {
+  text-decoration: underline;
+}
+
+.embed__descripcion {
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.embed__descripcion p + p {
+  margin-top: 4px;
+}
+
+/* Imagen o vídeo suelto del embed. */
+.embed__imagen,
+.embed__media {
+  display: block;
+  max-width: 100%;
+  margin-top: var(--sp-2);
+  border-radius: var(--r-md);
+}
+
+.embed__media {
+  max-height: 320px;
+}
+
+.embed__imagen {
+  cursor: zoom-in;
+}
+
+.embed__campos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: 2px;
+}
+
+.embed__campo {
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+/* Los campos no «inline» ocupan la fila completa. */
+.embed__campo:not(.embed__campo--linea) {
+  grid-column: 1 / -1;
+}
+
+.embed__campo-nombre {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.embed__campo-valor {
+  font-size: var(--text-md);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+.embed__pie {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--sp-1);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+/* ==================== Visor de imágenes ==================== */
+
+/* Por encima del cajón (80) y de los avisos (90). */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(4, 4, 6, 0.94);
+  animation: fundido var(--dur) var(--ease);
+}
+
+.lightbox__barra {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 44px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+
+.lightbox__nombre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.lightbox__acciones {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+/* Los botones del visor viven siempre sobre fondo oscuro. */
+.lightbox__acciones .btn--ghost {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.lightbox__acciones .btn--ghost:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: transparent;
+}
+
+.lightbox__escala {
+  width: 44px;
+  text-align: center;
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* `overflow: auto` deja recorrer la imagen ampliada. `safe center`
+   evita que el sobrante del zoom quede fuera del área desplazable. */
+.lightbox__lienzo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  align-items: safe center;
+  justify-content: center;
+  justify-content: safe center;
+  overflow: auto;
+  padding: var(--sp-4);
+}
+
+/* El zoom se aplica en línea sobre transform. */
+.lightbox__media {
+  max-width: 92%;
+  max-height: 92%;
+  object-fit: contain;
+  transform-origin: center;
+  transition: transform var(--dur) var(--ease);
+  user-select: none;
+}
+
+/* ============================================================
+   Markdown de Discord dentro de los mensajes
+   El parser de `message/discordMarkdown.ts` emite estas clases.
+   ============================================================ */
+
+/* Emoji personalizado: se alinea con la línea base del texto. */
+.emoji {
+  width: 20px;
+  height: 20px;
+  vertical-align: -4px;
+  object-fit: contain;
+}
+
+/* Mención resuelta o limpiada: se lee como una etiqueta, no como un enlace. */
+.mencion {
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  font-weight: 500;
+}
+
+/* Spoiler: cerrado por defecto, se revela con un clic. */
+.spoiler {
+  display: inline;
+}
+
+.spoiler > summary {
+  display: inline;
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  list-style: none;
+}
+
+.spoiler > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Abierto: la etiqueta sigue visible y clicable para poder volver a cerrarlo.
+   Es el único control del <details>, así que no se puede ocultar. */
+.spoiler[open] > summary {
+  margin-right: 4px;
+  background: transparent;
+  color: var(--fg-4);
+  font-size: var(--text-2xs);
+}
+
+.spoiler[open] {
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
+/* Código en línea y en bloque. */
+.codigo {
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+pre.codigo {
+  display: block;
+  margin: 6px 0;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* El bloque ya trae su propio fondo: el <code> interior no lo repite. */
+pre.codigo code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+/* Código en línea: `discordMarkdown` emite <code class="mono">. */
+.msg__texto code.mono {
+  padding: 0 3px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.92em;
+}
+
+/* Vídeo de un proveedor externo: vista previa con insignia de reproducción.
+   Se abre fuera de la app porque YouTube rechaza el origen `file://`. */
+.embed__proveedor-video {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  margin-top: var(--sp-2);
+  padding: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--ink-950);
+  cursor: pointer;
+}
+
+.embed__proveedor-video:hover {
+  border-color: var(--accent);
+}
+
+.embed__proveedor-video .embed__media {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Insignia de reproducción centrada sobre la miniatura. */
+.media__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-full);
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Navegación de tres paneles (riel, canales, contenido)
+   y superficies de archivo (colecciones, visor, árbol).
+   ============================================================ */
+
+/* ==================== Riel de servidores ==================== */
+
+/* 72 px fijos: el riel nunca compite por el ancho del contenido.
+   Scrollea solo él si hay muchos servidores. */
+.nav-rail {
+  width: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-1);
+  height: 100%;
+  min-height: 0;
+  flex-shrink: 0;
+}
+
+/* Cuadrado de 48 px centrado; la barra de acento se dibuja en ::before. */
+.nav-rail__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  border-radius: var(--r-md);
+  flex-shrink: 0;
+  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.nav-rail__item:hover {
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+
+.nav-rail__item--activo {
+  background: var(--surface-2);
+}
+
+.nav-rail__item--activo::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 24px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+
+.nav-rail__icono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-md);
+  object-fit: cover;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--fg-2);
+  overflow: hidden;
+}
+
+/* Insignia numérica en la esquina inferior derecha. */
+.nav-rail__badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--ink-950);
+  background: var(--accent);
+  border-radius: var(--r-full);
+  pointer-events: none;
+}
+
+.nav-rail__sep {
+  height: 1px;
+  margin: 6px 12px;
+  border: 0;
+  background: var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* ==================== Barra de canales ==================== */
+
+/* Columna de 256 px con su propio scroller: la cabecera de búsqueda
+   se queda arriba y el resto de la app no se desplaza. */
+.canales {
+  width: 256px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface-0);
+  flex-shrink: 0;
+}
+
+/* La cabecera es flex por sí misma: no depende de la clase `row`. */
+.canales__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* Buscador con icono: el texto nunca queda debajo del icono aunque
+   el input no lleve la clase `input--search`. */
+.search > .input {
+  padding-left: 30px;
+}
+
+.canales__buscar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-2);
+  flex-shrink: 0;
+}
+
+/* Los siete chips no entran en una línea a 232 px útiles: envuelven
+   sin que el TSX tenga que repetir el `flex-wrap` en línea. */
+.canales__buscar > .row {
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.canales__scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  min-height: 0;
+  padding: var(--sp-2);
+}
+
+/* El vacío de la barra llena el alto restante y se centra. */
+.canales__scroll > .empty {
+  flex: 1;
+}
+
+.canales__grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+/* Fila completa y flex propia: funciona sin la clase `row`. */
+.canales__grupo-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-2) 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* El fondo al pasar deja claro que el rótulo pliega el grupo. */
+.canales__grupo-titulo:hover {
+  background: var(--surface-2);
+  color: var(--fg-2);
+}
+
+.canales__fila {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.canales__fila:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.canales__fila--activo {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.canales__fila--activo::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+
+.canales__icono {
+  display: flex;
+  align-items: center;
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+
+.canales__nombre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canales__meta {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ==================== Selector de servidores ==================== */
+
+.servidores-panel {
+  width: 100%;
+  max-width: 560px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Cabecera y buscador fijos; solo la rejilla se desplaza.
+   La cabecera aporta el aire inferior y el buscador no repite borde. */
+.servidores-panel__head {
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+.servidores-panel__buscar {
+  padding: 0 var(--sp-4);
+  flex-shrink: 0;
+}
+
+/* La rejilla ocupa el alto restante del diálogo. */
+.servidores-panel__grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--sp-2);
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-2);
+  min-height: 0;
+}
+
+.servidores-panel__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.servidores-panel__item:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.servidores-panel__item--activo {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+/* El icono del riel se reutiliza aquí, pero a 32 px. */
+.servidores-panel__item .nav-rail__icono {
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-sm);
+}
+
+.servidores-panel__nombre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==================== Contenido ==================== */
+
+/* Columna flexible que contiene el scroller de la vista. */
+.contenido {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.contenido__vacio {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-8);
+  text-align: center;
+  min-height: 0;
+}
+
+/* Los accesos del vacío (canales recientes) se centran y envuelven
+   solos: el TSX no necesita repetir el `flex-wrap` en línea. */
+.contenido__vacio .row {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+/* ==================== Archivo: colecciones ==================== */
+
+.colecciones {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-4);
+  align-content: start;
+  padding: var(--sp-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+.coleccion {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.coleccion:hover {
+  border-color: var(--accent-line);
+}
+
+.coleccion__portada {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--surface-2);
+  display: block;
+  width: 100%;
+}
+
+.coleccion__cuerpo {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.coleccion__titulo {
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coleccion__meta {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.coleccion__acciones {
+  display: flex;
+  gap: var(--sp-2);
+  /* La flecha indica «entrar»: se alinea a la derecha, no suelta a la izquierda. */
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 var(--sp-3) var(--sp-3);
+  margin-top: auto;
+}
+
+.coleccion:hover .coleccion__acciones svg {
+  transform: translateX(2px);
+  color: var(--accent);
+}
+
+.coleccion__acciones svg {
+  transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* ==================== Archivo: visor ==================== */
+
+.visor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.visor__barra {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+.visor__migas {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+}
+
+.visor__acciones {
+  margin-left: auto;
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+/* Documento legible: ancho de lectura, centrado y con scroll propio. */
+.visor__doc {
+  flex: 1;
+  width: 100%;
+  max-width: 78ch;
+  margin: 0 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-6) var(--sp-5) var(--sp-8);
+  font-size: var(--text-md);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.visor__doc h1,
+.visor__doc h2,
+.visor__doc h3 {
+  font-family: var(--font-display);
+  color: var(--fg);
+  line-height: 1.25;
+}
+
+.visor__doc h1 {
+  font-size: var(--text-2xl);
+  margin: 0 0 var(--sp-4);
+}
+
+.visor__doc h2 {
+  font-size: var(--text-xl);
+  margin: var(--sp-6) 0 var(--sp-3);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.visor__doc h3 {
+  font-size: var(--text-lg);
+  margin: var(--sp-5) 0 var(--sp-2);
+}
+
+.visor__doc p {
+  margin: 0 0 var(--sp-3);
+}
+
+.visor__doc table {
+  width: 100%;
+  margin: var(--sp-3) 0;
+  border-collapse: collapse;
+  font-size: var(--text-md);
+}
+
+.visor__doc th,
+.visor__doc td {
+  border: 1px solid var(--line-soft);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.visor__doc th {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.visor__doc pre {
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.visor__doc img {
+  /* Una captura vertical no debe ocupar tres pantallas: se acota en alto y
+     se centra, y el clic la abre completa en el visor de imágenes. */
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  margin: var(--sp-3) auto;
+  object-fit: contain;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  cursor: zoom-in;
+}
+
+.visor__doc blockquote {
+  margin: var(--sp-3) 0;
+  padding-left: var(--sp-3);
+  border-left: 3px solid var(--line-strong);
+  color: var(--fg-2);
+}
+
+.visor__doc hr {
+  margin: var(--sp-5) 0;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.visor__galeria {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--sp-2);
+  align-content: start;
+  padding: var(--sp-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+.galeria__item {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  cursor: zoom-in;
+}
+
+.galeria__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ==================== Archivo: árbol ==================== */
+
+.arbol {
+  flex: 1 1 auto;
+  padding: var(--sp-2);
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+.arbol__fila {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  width: 100%;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.arbol__fila:hover {
+  background: var(--surface-2);
+}
+
+.arbol__fila--activo {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.arbol__guia {
+  width: 12px;
+  flex-shrink: 0;
+}
+
+/* Figuras del documento exportado: imagen + pie legible. */
+.visor__doc figure {
+  margin: var(--sp-4) 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.visor__doc figcaption {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  text-align: center;
+  font-style: italic;
+}
+
+/* Resaltado de coincidencias dentro del documento. */
+.visor__doc mark {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* El documento se puede seleccionar y copiar como cualquier texto. */
+.visor__doc {
+  user-select: text;
+}
+
+/* Eventos del canal (ingreso, mejora, fijado): una línea, no una fila muda. */
+.msg__evento {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  font-style: italic;
+}

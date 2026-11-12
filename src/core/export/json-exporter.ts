@@ -1,6 +1,6 @@
 // ============================================================
-// JSON Exporter — Raw structured JSON export with full
-// Discord data for programmatic use and backup/restore.
+// Exportador JSON — Exportación JSON estructurada en crudo con
+// todos los datos de Discord para uso programático y copia/restauración.
 // ============================================================
 
 import fs from 'fs'
@@ -15,7 +15,7 @@ export class JsonExporter {
   ): string {
     const data = {
       _export: {
-        tool: 'Discord Archive Pro',
+        tool: 'Estrato',
         version: '1.0.0',
         exported_at: new Date().toISOString(),
         format_version: 1
@@ -68,7 +68,7 @@ export class JsonExporter {
         })) || [],
         sticker_items: msg.sticker_items || [],
         referenced_message_id: msg.referenced_message?.id || null,
-        mentions: msg.mentions.map(u => ({
+        mentions: (msg.mentions ?? []).map(u => ({
           id: u.id,
           username: u.username
         }))
@@ -86,7 +86,7 @@ export class JsonExporter {
       }
     }
 
-    const filePath = path.join(outputDir, 'metadata.json')
+    const filePath = path.join(outputDir, 'post.json')
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
     return filePath
   }

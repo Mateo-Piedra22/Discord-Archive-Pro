@@ -1,175 +1,211 @@
 // ============================================================
-// File Downloader — Streaming HTTP file downloads with
-// progress, retry, and Windows-safe filename handling.
+// Descargador de archivos — descarga en streaming con hash incremental,
+// nombres legibles, deduplicación por contenido y cancelación.
 // ============================================================
 
 import fs from 'fs'
 import path from 'path'
-import { pipeline } from 'stream/promises'
-import { Readable } from 'stream'
 import crypto from 'crypto'
 import sanitize from 'sanitize-filename'
 
-// File Downloader — Streaming HTTP file downloads with
-// progress, retry, and Windows-safe filename handling.
+export interface DownloadRequest {
+  url: string
+  /** Directorio raíz del post (se crea <postDir>/assets/<subDir>). */
+  postDir: string
+  /** 'images' | 'videos' | 'files' */
+  subDir: string
+  filename: string
+  /** Conservar el nombre original en lugar de <hash><ext>. */
+  preserveFilename: boolean
+  /** Longitud máxima permitida en bytes (0 = sin límite). */
+  maxFileSize?: number
+  signal?: AbortSignal
+  onProgress?: (bytes: number) => void
+}
+
+export interface DownloadResult {
+  localPath: string
+  /** Ruta relativa POSIX sin './', p.ej. assets/images/foto.png */
+  relativePath: string
+  size: number
+  hash: string
+  /** true si el contenido ya existía (deduplicado por hash). */
+  reused: boolean
+}
+
 export class FileDownloader {
-  private maxRetries = 3
+  private maxRetries: number
 
-  async download(
-    url: string,
-    baseDir: string,
-    subDir: string,
-    filename: string,
-    onProgress?: (bytesChunk: number) => void
-  ): Promise<{ localPath: string; size: number }> {
-    // Robustly sanitize filename and path components
-    const safeFilename = this.sanitizeFilename(filename)
-    const ext = path.extname(safeFilename) || ''
-    
-    // Ensure the entire target directory path is sanitized
-    const targetDir = path.join(baseDir, 'assets', subDir)
+  constructor(maxRetries = 3) {
+    this.maxRetries = maxRetries
+  }
 
-    if (!fs.existsSync(targetDir)) {
-      // Use recursive true to ensure parent structure exists
-      fs.mkdirSync(targetDir, { recursive: true })
-    }
+  async download(req: DownloadRequest): Promise<DownloadResult> {
+    const targetDir = path.join(req.postDir, 'assets', req.subDir)
+    fs.mkdirSync(targetDir, { recursive: true })
 
-    // Temporary path to download — using a GUID prefix to avoid collisions
-    const tmpPath = path.join(targetDir, `${crypto.randomUUID()}.tmp`)
+    const safeName = this.sanitizeFilename(req.filename)
+    const ext = path.extname(safeName).toLowerCase()
+
+    const tmpPath = path.join(targetDir, `.tmp-${crypto.randomUUID()}`)
 
     let lastError: Error | null = null
+
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      if (req.signal?.aborted) {
+        this.safeUnlink(tmpPath)
+        throw new Error('cancelled')
+      }
+
       try {
-        const { size, hash } = await this.downloadFile(url, tmpPath, onProgress)
-        
-        // Final path using hash-based CAS (Content Addressable Storage)
-        let finalPath = path.join(targetDir, `${hash}${ext}`)
-        
-        // Final verification that temp file exists before rename
-        if (!fs.existsSync(tmpPath)) {
-          throw new Error(`Temp file ${tmpPath} disappeared during download`)
+        const { size, hash } = await this.streamToFile(req, tmpPath)
+
+        if (req.maxFileSize && req.maxFileSize > 0 && size > req.maxFileSize) {
+          this.safeUnlink(tmpPath)
+          throw new Error(`Excede el límite de tamaño (${size} > ${req.maxFileSize})`)
         }
 
-        if (!fs.existsSync(finalPath)) {
-          // Robust rename with a retry if busy
-          try {
-            fs.renameSync(tmpPath, finalPath)
-          } catch (renameErr) {
-            // Windows sometimes locks files; wait a tiny bit and retry or copy/unlink
-            await new Promise(r => setTimeout(r, 100))
-            if (fs.existsSync(tmpPath)) {
-               fs.copyFileSync(tmpPath, finalPath)
-               fs.unlinkSync(tmpPath)
-            }
+        // Cache por contenido: si ese hash ya existe, reutilizamos el archivo.
+        const contentPath = path.join(targetDir, `${hash}${ext}`)
+        if (fs.existsSync(contentPath)) {
+          this.safeUnlink(tmpPath)
+          return {
+            localPath: contentPath,
+            relativePath: this.toRelative(req.subDir, contentPath),
+            size,
+            hash,
+            reused: true
           }
-        } else {
-          // Deduplicated asset already exists
-          if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
         }
-        return { localPath: finalPath, size }
+
+        const finalPath = req.preserveFilename
+          ? this.uniquePath(targetDir, safeName)
+          : contentPath
+
+        this.moveFile(tmpPath, finalPath)
+
+        return {
+          localPath: finalPath,
+          relativePath: this.toRelative(req.subDir, finalPath),
+          size,
+          hash,
+          reused: false
+        }
       } catch (error) {
         lastError = error as Error
-        if (fs.existsSync(tmpPath)) {
-           try { fs.unlinkSync(tmpPath) } catch {}
-        }
-        
-        // Exponential backoff
+        this.safeUnlink(tmpPath)
+        if (req.signal?.aborted) throw new Error('cancelled')
         if (attempt < this.maxRetries - 1) {
-          const backoff = Math.pow(2, attempt) * 1000 + Math.random() * 1000 
-          await new Promise(r => setTimeout(r, backoff))
+          await this.sleep(Math.pow(2, attempt) * 1000 + Math.random() * 500)
         }
       }
     }
 
-    throw lastError || new Error(`Failed to download ${url} after ${this.maxRetries} attempts`)
+    throw lastError || new Error(`No se pudo descargar ${req.url}`)
   }
 
-  private async downloadFile(
-    url: string,
-    targetPath: string,
-    onProgress?: (bytesChunk: number) => void
+  // ----------- Internos -----------
+
+  private async streamToFile(
+    req: DownloadRequest,
+    targetPath: string
   ): Promise<{ size: number; hash: string }> {
-    const response = await fetch(url, {
+    const response = await fetch(req.url, {
+      signal: req.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Client/1.0'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Client/1.0'
       }
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: Failed to download ${url}`)
+      throw new Error(`HTTP ${response.status} al descargar ${req.url}`)
     }
-
     if (!response.body) {
-      throw new Error('Response has no body')
+      throw new Error('La respuesta no tiene cuerpo')
     }
 
-    // Using Writable stream with proper buffering
+    const declared = Number(response.headers.get('content-length') || 0)
+    if (req.maxFileSize && declared > 0 && declared > req.maxFileSize) {
+      throw new Error(`Excede el límite de tamaño (${declared} > ${req.maxFileSize})`)
+    }
+
     const writeStream = fs.createWriteStream(targetPath)
     const hasher = crypto.createHash('sha256')
-    let totalBytes = 0
+    let total = 0
 
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
     try {
-      if (typeof (response.body as any).getReader === 'function') {
-        const reader = (response.body as any).getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = Buffer.from(value);
-          hasher.update(chunk);
-          totalBytes += chunk.length;
-          
-          // Wait for drain if needed to respect backpressure
-          if (!writeStream.write(chunk)) {
-            await new Promise(resolve => writeStream.once('drain', resolve))
-          }
-          
-          if (onProgress) onProgress(chunk.length);
+      while (true) {
+        if (req.signal?.aborted) throw new Error('cancelled')
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = Buffer.from(value)
+        hasher.update(chunk)
+        total += chunk.length
+        if (!writeStream.write(chunk)) {
+          await new Promise<void>((resolve) => writeStream.once('drain', () => resolve()))
         }
-        writeStream.end();
-      } else {
-        // Standard ReadableStream
-        for await (const chunk of response.body as any) {
-          const bufferChunk = Buffer.from(chunk);
-          hasher.update(bufferChunk);
-          totalBytes += bufferChunk.length;
-          
-          if (!writeStream.write(bufferChunk)) {
-             await new Promise(resolve => writeStream.once('drain', resolve))
-          }
-          
-          if (onProgress) onProgress(bufferChunk.length);
-        }
-        writeStream.end();
+        req.onProgress?.(chunk.length)
       }
-
-      // Wait for the stream to fully finish writing to disk
-      await new Promise((resolve, reject) => {
-        writeStream.on('finish', resolve)
+      writeStream.end()
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('finish', () => resolve())
         writeStream.on('error', reject)
       })
-    } catch (err) {
+    } catch (error) {
       writeStream.destroy()
-      throw err
+      try { await reader.cancel() } catch { /* ignorar */ }
+      throw error
     }
 
-    return { size: totalBytes, hash: hasher.digest('hex') }
+    return { size: total, hash: hasher.digest('hex') }
+  }
+
+  private moveFile(from: string, to: string): void {
+    try {
+      fs.renameSync(from, to)
+    } catch {
+      // Windows a veces bloquea el rename; copiamos y borramos.
+      fs.copyFileSync(from, to)
+      this.safeUnlink(from)
+    }
+  }
+
+  private uniquePath(dir: string, filename: string): string {
+    const ext = path.extname(filename)
+    const base = path.basename(filename, ext)
+    let candidate = path.join(dir, filename)
+    let counter = 2
+    while (fs.existsSync(candidate)) {
+      candidate = path.join(dir, `${base} (${counter})${ext}`)
+      counter++
+    }
+    return candidate
+  }
+
+  private toRelative(subDir: string, absolutePath: string): string {
+    return path.posix.join('assets', subDir, path.basename(absolutePath))
+  }
+
+  private safeUnlink(filePath: string): void {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    } catch { /* ignorar */ }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   sanitizeFilename(filename: string): string {
-    // Use the industry standard sanitize-filename library
     let safe = sanitize(filename, { replacement: '_' })
-    
-    // Custom trimming for Windows compatibility
     safe = safe.replace(/^[. ]+|[. ]+$/g, '')
-    
-    // Truncate to reasonable length for MAX_PATH
-    if (safe.length > 180) {
+
+    if (safe.length > 150) {
       const ext = path.extname(safe)
-      safe = safe.substring(0, 180 - ext.length) + ext
+      safe = safe.substring(0, 150 - ext.length) + ext
     }
-    
-    if (!safe) safe = 'unnamed_file'
-    return safe
+
+    return safe || 'archivo'
   }
 }
-

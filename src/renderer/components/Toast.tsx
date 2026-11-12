@@ -7,13 +7,31 @@ export interface Toast {
   exiting?: boolean
 }
 
+type ToastType = Toast['type']
+
 let toastId = 0
-let globalAddToast: ((msg: string, type: Toast['type']) => void) | null = null
+let globalAddToast: ((msg: string, type: ToastType) => void) | null = null
+
+/**
+ * Cola de mensajes emitidos antes de que el contenedor esté montado.
+ * Sin esto, cualquier `showToast()` de arranque (p. ej. desde un store)
+ * se perdía en silencio.
+ */
+const MAX_PENDING = 10
+const pendingToasts: { message: string; type: ToastType }[] = []
+
+function flushPendingToasts() {
+  if (!globalAddToast) return
+  while (pendingToasts.length > 0) {
+    const next = pendingToasts.shift()
+    if (next) globalAddToast(next.message, next.type)
+  }
+}
 
 export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const addToast = useCallback((message: string, type: Toast['type']) => {
+  const addToast = useCallback((message: string, type: ToastType) => {
     const id = ++toastId
     setToasts(prev => [...prev, { id, message, type }])
     setTimeout(() => {
@@ -24,7 +42,13 @@ export function useToast() {
 
   useEffect(() => {
     globalAddToast = addToast
-    return () => { globalAddToast = null }
+    // Vaciamos lo que se haya emitido antes del montaje del contenedor.
+    flushPendingToasts()
+    return () => {
+      // Solo nos desregistramos si seguimos siendo el handler activo
+      // (evita que un desmontaje tardío anule al contenedor actual).
+      if (globalAddToast === addToast) globalAddToast = null
+    }
   }, [addToast])
 
   const removeToast = useCallback((id: number) => {
@@ -34,8 +58,14 @@ export function useToast() {
   return { toasts, addToast, removeToast }
 }
 
-export function showToast(message: string, type: Toast['type'] = 'info') {
-  if (globalAddToast) globalAddToast(message, type)
+export function showToast(message: string, type: ToastType = 'info') {
+  if (globalAddToast) {
+    globalAddToast(message, type)
+    return
+  }
+  // Contenedor aún no montado: guardamos (máx. 10, descartando el más viejo).
+  if (pendingToasts.length >= MAX_PENDING) pendingToasts.shift()
+  pendingToasts.push({ message, type })
 }
 
 export function ToastContainer({ toasts, onRemove }: { toasts: Toast[]; onRemove: (id: number) => void }) {

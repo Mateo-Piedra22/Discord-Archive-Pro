@@ -1,280 +1,925 @@
-// AboutView.tsx — Legal disclaimer, usage policy, non-affiliation notice,
-//                 privacy statement, and application info.
+// AboutView.tsx — Vista legal de producto de Estrato.
+// Siete secciones navegables con estado local: resumen, licencia de uso,
+// licencias de terceros, privacidad, permisos, términos de Discord y
+// soporte. Cada afirmación se corresponde con el código de la aplicación.
 
-import React, { useState } from 'react'
+import { useState } from 'react'
+import type { ReactNode } from 'react'
 import {
-  ShieldAlert, FileText, Info, Heart, AlertTriangle, ExternalLink,
-  Lock, Globe, HelpCircle, BookOpen, ChevronDown, ChevronRight
+  BookOpen,
+  CircleCheck,
+  Database,
+  HardDrive,
+  KeyRound,
+  LifeBuoy,
+  Lock,
+  MessagesSquare,
+  Package,
+  Scale,
+  ShieldCheck,
+  TriangleAlert
 } from 'lucide-react'
 
-const VERSION = '1.0.0'
-const BUILD_DATE = '2026'
+/** Versión del producto inyectada por Vite desde package.json. */
+const VERSION = __APP_VERSION__
 
-// ─── Section accordion ────────────────────────────────────────────────────────
-function Section({ icon, title, accent, children }: {
-  icon: React.ReactNode
-  title: string
-  accent?: string
-  children: React.ReactNode
-}) {
-  const [open, setOpen] = useState(true)
-  return (
-    <div style={{
-      border: `1px solid ${accent ? `${accent}33` : 'var(--border)'}`,
-      borderRadius: 10,
-      overflow: 'hidden',
-      background: accent ? `${accent}08` : 'var(--bg-1)'
-    }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          width: '100%', padding: '12px 16px', border: 'none',
-          background: 'transparent', cursor: 'pointer', textAlign: 'left'
-        }}
-      >
-        <span style={{ color: accent || 'var(--accent)', display: 'flex' }}>{icon}</span>
-        <span style={{ flex: 1, fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-0)' }}>{title}</span>
-        {open ? <ChevronDown size={14} style={{ color: 'var(--text-3)' }} /> : <ChevronRight size={14} style={{ color: 'var(--text-3)' }} />}
-      </button>
-      {open && (
-        <div style={{ padding: '0 16px 14px', fontSize: '0.82rem', color: 'var(--text-2)', lineHeight: 1.65 }}>
-          {children}
-        </div>
-      )}
-    </div>
-  )
+/** Año de la primera publicación, usado en los avisos de titularidad. */
+const ANIO = 2026
+
+// ============================================================
+// Navegación
+// ============================================================
+
+type SeccionId =
+  | 'resumen'
+  | 'licencia'
+  | 'terceros'
+  | 'privacidad'
+  | 'permisos'
+  | 'discord'
+  | 'contacto'
+
+interface EntradaNav {
+  id: SeccionId
+  nombre: string
+  numero: string
+  icono: typeof BookOpen
 }
 
-function P({ children, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p style={{ marginBottom: 8, ...props.style }} {...props}>{children}</p>
-}
-
-function Strong({ children }: { children: React.ReactNode }) {
-  return <strong style={{ color: 'var(--text-0)', fontWeight: 700 }}>{children}</strong>
-}
-
-function Bullet({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 5 }}>
-      <span style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 2 }}>›</span>
-      <span>{children}</span>
-    </div>
-  )
-}
-
-function ExLink({ href, children }: { href: string; children: React.ReactNode }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={e => { e.preventDefault(); window.open(href) }}
-      style={{ color: 'var(--accent)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}
-    >
-      {children} <ExternalLink size={10} />
-    </a>
-  )
-}
-
-// ─── Tab list ─────────────────────────────────────────────────────────────────
-type LegalTab = 'about' | 'disclaimer' | 'usage' | 'privacy' | 'terms'
-
-const TABS: { key: LegalTab; label: string; icon: React.ReactNode }[] = [
-  { key: 'about', label: 'Acerca de', icon: <Info size={13} /> },
-  { key: 'disclaimer', label: 'Aviso Legal', icon: <ShieldAlert size={13} /> },
-  { key: 'usage', label: 'Uso', icon: <BookOpen size={13} /> },
-  { key: 'privacy', label: 'Privacidad', icon: <Lock size={13} /> },
-  { key: 'terms', label: 'ToS Discord', icon: <FileText size={13} /> },
+const SECCIONES: EntradaNav[] = [
+  { id: 'resumen', nombre: 'Resumen', numero: '01', icono: BookOpen },
+  { id: 'licencia', nombre: 'Licencia de uso', numero: '02', icono: Scale },
+  { id: 'terceros', nombre: 'Licencias de terceros', numero: '03', icono: Package },
+  { id: 'privacidad', nombre: 'Privacidad y datos', numero: '04', icono: Lock },
+  { id: 'permisos', nombre: 'Permisos y seguridad', numero: '05', icono: ShieldCheck },
+  { id: 'discord', nombre: 'Términos de Discord', numero: '06', icono: MessagesSquare },
+  { id: 'contacto', nombre: 'Contacto y soporte', numero: '07', icono: LifeBuoy }
 ]
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-export default function AboutView() {
-  const [tab, setTab] = useState<LegalTab>('about')
+// ============================================================
+// Piezas de composición
+// ============================================================
 
+/** Párrafo de cuerpo con la medida de lectura del resto de la vista. */
+function Parrafo({ children }: { children: ReactNode }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Sub-tabs */}
-      <div style={{
-        display: 'flex', gap: 2, padding: '8px 12px',
-        borderBottom: '1px solid var(--border)', background: 'var(--bg-1)',
-        flexShrink: 0, overflowX: 'auto'
-      }}>
-        {TABS.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 12px', borderRadius: 6, border: 'none',
-              background: tab === t.key ? 'var(--accent-dim)' : 'transparent',
-              color: tab === t.key ? 'var(--accent-text)' : 'var(--text-2)',
-              fontWeight: tab === t.key ? 700 : 400,
-              fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap',
-              fontFamily: 'var(--font)'
-            }}
-          >
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
+    <p style={{ fontSize: 'var(--text-md)', lineHeight: 1.7, color: 'var(--fg-2)', maxWidth: '72ch' }}>
+      {children}
+    </p>
+  )
+}
 
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+/** Entradilla editorial: serif y un punto más grande que el cuerpo. */
+function Entradilla({ children }: { children: ReactNode }) {
+  return (
+    <p
+      style={{
+        fontFamily: 'var(--font-display)',
+        fontSize: 'var(--text-lg)',
+        lineHeight: 1.5,
+        color: 'var(--fg)',
+        letterSpacing: '-0.01em',
+        maxWidth: '48ch'
+      }}
+    >
+      {children}
+    </p>
+  )
+}
 
-        {/* ── ABOUT ── */}
-        {tab === 'about' && (<>
-          {/* Hero */}
-          <div style={{
-            padding: '30px 20px', borderRadius: 16, textAlign: 'center',
-            background: 'linear-gradient(135deg, rgba(88,101,242,0.15) 0%, rgba(235,69,158,0.1) 100%)',
-            border: '1px solid rgba(88,101,242,0.25)', marginBottom: 8,
-            boxShadow: '0 4px 24px rgba(0,0,0,0.1)'
-          }}>
-            <div style={{ fontWeight: 900, fontSize: '1.6rem', color: 'var(--text-0)', marginBottom: 6, letterSpacing: '-0.02em' }}>
-              Discord Archive Pro
-            </div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-3)', fontStyle: 'italic' }}>
-              Advanced Archiving & Forensic Data Export Tool
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginTop: 4 }}>
-              Versión {VERSION} (2026) · © {BUILD_DATE}
-            </div>
-          </div>
+/** Lista de puntos con marca de acento. */
+function Lista({ children }: { children: ReactNode }) {
+  return (
+    <ul className="col" style={{ gap: 'var(--sp-2)' }}>
+      {children}
+    </ul>
+  )
+}
 
-          <Section icon={<Info size={16} />} title="Visión General del Proyecto">
-            <P>
-              <Strong>Discord Archive Pro</Strong> es una solución de grado profesional diseñada para la preservación de datos digitales. En una era donde las plataformas centralizadas dominan nuestra comunicación, poseer copias locales de tus conversaciones es un acto de soberanía digital.
-            </P>
-            <P>
-              Esta herramienta permite transformar el flujo efímero de Discord en registros estáticos, inmutables y portables. Ideal para archivistas, comunidades que desean respaldar su conocimiento colectivo, o usuarios individuales que buscan preservar recuerdos personales.
-            </P>
-            <Bullet><Strong>Autonomía Estructural</Strong>: Los datos exportados no dependen de la infraestructura de Discord para ser visualizados.</Bullet>
-            <Bullet><Strong>Portabilidad Extrema</Strong>: Formatos universales compatibles con cualquier visor de texto, navegador o e-reader.</Bullet>
-          </Section>
+function Punto({ children }: { children: ReactNode }) {
+  return (
+    <li className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-2)' }}>
+      <span
+        aria-hidden="true"
+        style={{
+          width: 4,
+          height: 4,
+          marginTop: 9,
+          flexShrink: 0,
+          borderRadius: 'var(--r-full)',
+          background: 'var(--accent)'
+        }}
+      />
+      <span style={{ fontSize: 'var(--text-md)', lineHeight: 1.65, color: 'var(--fg-2)' }}>{children}</span>
+    </li>
+  )
+}
 
-          <Section icon={<Heart size={16} />} title="Ecosistema Tecnológico">
-            <Bullet><Strong>Electron Framework (v34+)</Strong> — Núcleo de alto rendimiento para aplicaciones híbridas.</Bullet>
-            <Bullet><Strong>React 19 & TypeScript 5</Strong> — Interface reactiva con tipado estricto para máxima estabilidad.</Bullet>
-            <Bullet><Strong>SQLite Advanced Engine</Strong> — Manejo de caché local con capacidad para millones de registros sin degradación.</Bullet>
-            <Bullet><Strong>Vercel Optimization Patterns</Strong> — Implementación de mejores prácticas de renderizado y performance.</Bullet>
-            <Bullet><Strong>Secure Storage Architecture</Strong> — Cifrado de credenciales mediante DPAPI (Windows) / Keychain (macOS).</Bullet>
-          </Section>
-        </>)}
+/** Rótulo de bloque: versalitas discretas que ordenan el contenido. */
+function Rotulo({ children }: { children: ReactNode }) {
+  return <div className="section__title">{children}</div>
+}
 
-        {/* ── DISCLAIMER ── */}
-        {tab === 'disclaimer' && (<>
-          <Section icon={<AlertTriangle size={16} />} title="Estatus Jurídico y No Afiliación" accent="#faa61a">
-            <div style={{
-              background: 'rgba(250,166,26,0.1)', border: '1px solid rgba(250,166,26,0.3)',
-              borderRadius: 8, padding: '12px 16px', marginBottom: 14, fontWeight: 700, color: '#faa61a',
-              lineHeight: 1.4
-            }}>
-              ATENCIÓN: Discord Archive Pro es una herramienta INDEPENDIENTE. No existe vínculo societario, comercial ni oficial con Discord Inc.
-            </div>
-            <P>
-              <Strong>Discord Inc.</Strong> posee todos los derechos sobre la marca "Discord" y sus activos visuales. El uso de dichos términos en esta aplicación es estrictamente nominativo y descriptivo, destinado únicamente a informar al usuario sobre la compatibilidad del servicio.
-            </P>
-          </Section>
+/** Fila etiqueta / valor con línea inferior tenue. */
+function Dato({ etiqueta, valor }: { etiqueta: string; valor: string }) {
+  return (
+    <div
+      className="row"
+      style={{
+        justifyContent: 'space-between',
+        alignItems: 'baseline',
+        gap: 'var(--sp-4)',
+        padding: '7px 0',
+        borderBottom: '1px solid var(--line-soft)'
+      }}
+    >
+      <span className="muted" style={{ fontSize: 'var(--text-sm)' }}>
+        {etiqueta}
+      </span>
+      <span className="mono" style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)', textAlign: 'right' }}>
+        {valor}
+      </span>
+    </div>
+  )
+}
 
-          <Section icon={<ShieldAlert size={16} />} title="Limitación de Responsabilidad (Hold Harmless)" accent="#ed4245">
-            <P>
-              El usuario reconoce y acepta que el uso de esta herramienta conlleva riesgos inherentes. <Strong>Discord Archive Pro y sus desarrolladores NO serán responsables por:</Strong>
-            </P>
-            <Bullet><Strong>Acciones de la Plataforma</Strong>: Baneos de cuentas (Shadow-bans, suspensiones permanentes) por violar las políticas de Discord en cuanto a automatización o "self-bots".</Bullet>
-            <Bullet><Strong>Integridad de Datos</Strong>: Errores en la exportación, pérdida de archivos o fallos en el proceso de descarga.</Bullet>
-            <Bullet><Strong>Uso de Credenciales</Strong>: Consecuencias derivadas del manejo manual de tokens por parte del usuario.</Bullet>
-            <P style={{ marginTop: 10, padding: 10, background: 'rgba(237,66,69,0.05)', borderRadius: 6, borderLeft: '3px solid var(--red)' }}>
-              Al ejecutar esta aplicación, el usuario libera de toda responsabilidad legal y financiera a los creadores de este software por cualquier daño derivado del acceso a los servidores de Discord mediante métodos no aprobados explícitamente por dicha empresa.
-            </P>
-          </Section>
+/** Cifra grande con su leyenda: la retícula de garantías del resumen. */
+function Garantia({ cifra, texto }: { cifra: string; texto: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        padding: 'var(--sp-3) var(--sp-4)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: 'var(--r-md)',
+        background: 'var(--surface-1)'
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: 'var(--text-xl)',
+          fontVariantNumeric: 'tabular-nums',
+          letterSpacing: '-0.02em',
+          color: 'var(--fg)',
+          lineHeight: 1.15
+        }}
+      >
+        {cifra}
+      </span>
+      <span className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.4 }}>
+        {texto}
+      </span>
+    </div>
+  )
+}
 
-          <Section icon={<HelpCircle size={16} />} title="Aviso sobre Propiedad Intelectual">
-            <P>
-              Los mensajes, imágenes y contenidos descargados a través de esta herramienta son propiedad intelectual de sus respectivos autores. El hecho de poder descargarlos no otorga al usuario derechos de autor, licencia de distribución ni propiedad alguna sobre el contenido de terceros.
-            </P>
-          </Section>
-        </>)}
-
-        {/* ── USAGE ── */}
-        {tab === 'usage' && (<>
-          <Section icon={<BookOpen size={16} />} title="Código de Conducta y Ética de Datos">
-            <P>El archivado de datos debe realizarse bajo principios éticos:</P>
-            <Bullet><Strong>Finalidad Legítima</Strong>: Uso para backup personal, investigación académica o archivo histórico sin fines de lucro.</Bullet>
-            <Bullet><Strong>Respeto a la Privacidad</Strong>: Abstención de archivar canales privados o DMs sin el consentimiento explícito de los participantes.</Bullet>
-            <Bullet><Strong>Transparencia</Strong>: En contextos de servidores comunitarios, se recomienda informar a los moderadores sobre la realización de respaldos.</Bullet>
-          </Section>
-
-          <Section icon={<AlertTriangle size={16} />} title="Prohibiciones Críticas" accent="#ed4245">
-            <Bullet><Strong>Comercialización</Strong>: Venta de bases de datos de usuarios o mensajes extraídos mediante esta aplicación.</Bullet>
-            <Bullet><Strong>Entrenamiento de Modelos de IA</Strong>: Queda terminantemente prohibido usar los datos extraídos de terceros para alimentar modelos de lenguaje (LLMs) u otras IAs sin autorización legal de los autores originales (Safe-Guard for AI Training 2026).</Bullet>
-            <Bullet><Strong>Explotación de Vulnerabilidades</Strong>: Uso de la herramienta para encontrar debilidades en la infraestructura de Discord.</Bullet>
-          </Section>
-
-          <Section icon={<Info size={16} />} title="Cumplimiento con Rate-Limits">
-            <P>
-              La herramienta incluye un limitador inteligente de tasa de peticiones. Forzar o "hackear" los timeouts internos de la aplicación para acelerar descargas es un motivo directo de baneo por parte de los sistemas de seguridad de Discord (Anti-Scraping protection). <Strong>Usa la configuración recomendada.</Strong>
-            </P>
-          </Section>
-        </>)}
-
-        {/* ── PRIVACY ── */}
-        {tab === 'privacy' && (<>
-          <Section icon={<Lock size={16} />} title="Arquitectura de Privacidad Local (Zero-Server)" accent="#23a559">
-            <P><Strong>Discord Archive Pro opera bajo el paradigma de "Conocimiento Cero".</Strong></P>
-            <P>No existe un servidor central, no hay telemetría de uso y no hay seguimiento de errores enviado a la nube.</P>
-            <Bullet><Strong>Local-First Storage</Strong>: Tu token viaja directamente de tu almacenamiento seguro al socket de Discord. Nunca es interceptado por un tercero.</Bullet>
-            <Bullet><Strong>Aislamiento de Red</Strong>: El proceso renderer tiene restricciones estrictas para no conectarse a ninguna dirección que no sea la API oficial de Discord o CDNs de assets.</Bullet>
-            <Bullet><Strong>Auditoría de Caché</Strong>: La base de datos SQLite es accesible y legible por ti en cualquier momento usando herramientas estándar.</Bullet>
-          </Section>
-
-          <Section icon={<ShieldAlert size={16} />} title="Cumplimiento Normativo (GDPR / CCPA / LGPD)">
-            <P>
-              Como usuario de esta herramienta, actúas como el <Strong>Controlador de Datos</Strong>. Eres responsable de cumplir con las legislaciones locales sobre el tratamiento de datos de carácter personal.
-            </P>
-            <P>
-              Recuerda que el derecho al archivado personal (personal use exception) tiene límites en cada jurisdicción. El uso de esta aplicación implica que conoces y acatas estas regulaciones.
-            </P>
-          </Section>
-        </>)}
-
-        {/* ── DISCORD ToS ── */}
-        {tab === 'terms' && (<>
-          <Section icon={<FileText size={16} />} title="Interpretación de los Términos de Discord" accent="#5865F2">
-            <P>Los Términos de Servicio de Discord son un contrato vinculante. Aspectos críticos a considerar:</P>
-            <Bullet>
-              <Strong>Sección 3.2 (Restrictions)</Strong>: Prohíbe el uso de software automatizado para acceder a los servicios. Discord Archive Pro automatiza la lectura de la API de forma que imita el comportamiento humano, pero sigue siendo un riesgo técnico.
-            </Bullet>
-            <Bullet>
-              <Strong>Propiedad del Usuario</Strong>: Tú eres dueño de tus mensajes, pero Discord tiene una licencia de uso sobre ellos. El archivado local te devuelve el control físico de tus datos.
-            </Bullet>
-            <Bullet>
-              <Strong>Derecho al Olvido</Strong>: Si un usuario borra sus mensajes en Discord, tu copia local persistirá. Maneja esta información con responsabilidad ética y legal.
-            </Bullet>
-          </Section>
-
-          <Section icon={<Globe size={16} />} title="Directrices de la comunidad" accent="#5865F2">
-            <P>Además de los ToS, las <ExLink href="https://discord.com/guidelines">Normas de la Comunidad</ExLink> de Discord prohíben:</P>
-            <Bullet>Compartir información privada de otras personas sin consentimiento (doxxing).</Bullet>
-            <Bullet>Acosar, intimidar o amenazar a otros usuarios.</Bullet>
-            <Bullet>Evadir sanciones o bans de servidores o de la plataforma.</Bullet>
-            <P>El uso de Discord Archive Pro para infringir estas normas está expresamente prohibido por nuestra política de uso.</P>
-          </Section>
-
-          <Section icon={<AlertTriangle size={16} />} title="Recomendaciones legales" accent="#faa61a">
-            <P>
-              <Strong>Si exportas conversaciones de terceros</Strong>, considera las siguientes leyes:
-            </P>
-            <Bullet><Strong>GDPR (UE)</Strong>: Requiere base legal para procesar datos personales de ciudadanos europeos.</Bullet>
-            <Bullet><Strong>CCPA (California)</Strong>: Otorga derechos a los consumidores sobre sus datos personales.</Bullet>
-            <Bullet><Strong>LGPD (Brasil)</Strong>: Ley General de Protección de Datos, similar al GDPR.</Bullet>
-            <P>
-              Esta herramienta está diseñada para uso personal. Consulta con un asesor legal si
-              planeas usar el contenido exportado en contextos comerciales o de investigación.
-            </P>
-          </Section>
-        </>)}
+/** Fila de verificación: hecho comprobado con su sello «activo». */
+function Verificacion({ titulo, children }: { titulo: string; children: ReactNode }) {
+  return (
+    <div
+      className="row"
+      style={{
+        alignItems: 'flex-start',
+        gap: 'var(--sp-3)',
+        padding: 'var(--sp-3) 0',
+        borderBottom: '1px solid var(--line-soft)'
+      }}
+    >
+      <CircleCheck
+        size={15}
+        strokeWidth={1.8}
+        style={{ color: 'var(--ok)', flexShrink: 0, marginTop: 2 }}
+        aria-hidden="true"
+      />
+      <div className="col" style={{ gap: 2, minWidth: 0, flex: 1 }}>
+        <div className="row" style={{ gap: 'var(--sp-2)', alignItems: 'center' }}>
+          <span style={{ fontSize: 'var(--text-md)', color: 'var(--fg)' }}>{titulo}</span>
+          <span className="badge badge--ok">Activo</span>
+        </div>
+        <span className="dim" style={{ fontSize: 'var(--text-sm)', lineHeight: 1.55 }}>
+          {children}
+        </span>
       </div>
     </div>
+  )
+}
+
+/** Tarjeta contenedora de una sección con cabecera propia. */
+function Bloque({
+  icono: Icono,
+  titulo,
+  meta,
+  children
+}: {
+  icono: typeof BookOpen
+  titulo: string
+  meta?: string
+  children: ReactNode
+}) {
+  return (
+    <section className="card">
+      <header className="card__header">
+        <Icono size={16} strokeWidth={1.8} style={{ color: 'var(--accent)' }} aria-hidden="true" />
+        <span
+          className="card__title"
+          style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-lg)', letterSpacing: '-0.01em' }}
+        >
+          {titulo}
+        </span>
+        <span className="spacer" />
+        {meta && <span className="badge">{meta}</span>}
+      </header>
+      <div className="card__body col" style={{ gap: 'var(--sp-4)' }}>
+        {children}
+      </div>
+    </section>
+  )
+}
+
+// ============================================================
+// 01 · Resumen
+// ============================================================
+
+function SeccionResumen() {
+  return (
+    <Bloque icono={BookOpen} titulo="Resumen" meta={`v${VERSION}`}>
+      <Entradilla>
+        Estrato archiva comunidades de Discord en tu propio disco: convierte hilos y canales en
+        documentos que siguen siendo legibles dentro de veinte años.
+      </Entradilla>
+
+      <Parrafo>
+        Es una aplicación de escritorio que funciona sin cuenta propia, sin servidor intermedio y sin
+        ningún servicio en la nube. Se conecta a Discord con el token de tu cuenta, descarga lo que esa
+        cuenta ya puede ver y lo escribe en la carpeta que elijas. No publica, no reacciona y no
+        modifica nada en la plataforma.
+      </Parrafo>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: 'var(--sp-2)'
+        }}
+      >
+        <Garantia cifra="0" texto="Servidores centrales. Nada pasa por infraestructura propia." />
+        <Garantia cifra="0" texto="Telemetría, analítica o informe de errores a terceros." />
+        <Garantia cifra="1" texto="Carpeta local: tus archivos, tu disco, tu copia de seguridad." />
+        <Garantia cifra="Solo lectura" texto="Únicamente descarga lo que tu cuenta ya ve." />
+      </div>
+
+      <hr className="divider" />
+
+      <div className="col" style={{ gap: 0 }}>
+        <Dato etiqueta="Producto" valor="Estrato" />
+        <Dato etiqueta="Versión" valor={VERSION} />
+        <Dato etiqueta="Licencia del software" valor="Propietaria · uso personal" />
+        <Dato etiqueta="Titular" valor={`Estrato, ${ANIO}`} />
+        <Dato etiqueta="Plataforma" valor="Windows · Electron + React" />
+      </div>
+
+      <div
+        className="row"
+        style={{
+          alignItems: 'flex-start',
+          gap: 'var(--sp-3)',
+          padding: 'var(--sp-3) var(--sp-4)',
+          border: '1px solid var(--accent-line)',
+          borderRadius: 'var(--r-md)',
+          background: 'var(--accent-soft)'
+        }}
+      >
+        <TriangleAlert
+          size={15}
+          strokeWidth={1.8}
+          style={{ color: 'var(--accent-fg)', flexShrink: 0, marginTop: 2 }}
+          aria-hidden="true"
+        />
+        <p style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+          <strong style={{ color: 'var(--fg)' }}>Sin afiliación.</strong> Estrato es un proyecto
+          independiente. No está afiliado, patrocinado ni respaldado por Discord Inc. «Discord» es una
+          marca de Discord Inc. y se menciona aquí solo para describir la compatibilidad.
+        </p>
+      </div>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 02 · Licencia de uso (EULA)
+// ============================================================
+
+function SeccionLicencia() {
+  return (
+    <Bloque icono={Scale} titulo="Licencia de uso" meta="EULA">
+      <Parrafo>
+        Estrato se entrega bajo una licencia propietaria: se te concede el derecho a usarlo, no la
+        propiedad del programa. El texto completo, en español e inglés, acompaña al proyecto en el
+        archivo <span className="mono">LICENSE</span>.
+      </Parrafo>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Lo que puedes hacer</Rotulo>
+        <Lista>
+          <Punto>
+            Instalar y usar la aplicación en tus propios equipos, para fines personales o de archivo
+            interno.
+          </Punto>
+          <Punto>
+            Conservar copias de seguridad del ejecutable y de la carpeta <span className="mono">data/</span>{' '}
+            para no perder tu archivo.
+          </Punto>
+          <Punto>
+            Usar el contenido exportado según lo que la ley y los autores de ese contenido permitan.
+          </Punto>
+        </Lista>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Lo que no puedes hacer</Rotulo>
+        <Lista>
+          <Punto>
+            Redistribuir, vender, alquilar o sublicenciar el programa, ni empaquetarlo dentro de otro
+            producto.
+          </Punto>
+          <Punto>
+            Retirar los avisos de titularidad, de versión o de licencia.
+          </Punto>
+          <Punto>
+            Descompilar, desensamblar o intentar obtener el código fuente, salvo en la medida en que la
+            ley aplicable lo permita expresamente pese a esta prohibición.
+          </Punto>
+          <Punto>
+            Usar la aplicación para eludir límites de peticiones, automatizar cuentas ajenas o archivar
+            contenido sin autorización de sus participantes.
+          </Punto>
+        </Lista>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Titularidad del contenido archivado</Rotulo>
+        <Parrafo>
+          Los mensajes, imágenes y archivos que exportas siguen perteneciendo a quienes los escribieron
+          y a las comunidades donde se publicaron. Esta licencia no te transfiere ningún derecho sobre
+          ese contenido: solo regula el uso del programa. Eres responsable de tener base legal para
+          conservar una copia.
+        </Parrafo>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Garantías y responsabilidad</Rotulo>
+        <Parrafo>
+          El programa se entrega «tal cual» y «según disponibilidad», sin garantía de ningún tipo,
+          expresa o implícita, incluida la aptitud para un fin concreto o la ausencia de errores. En la
+          medida máxima que permita la ley, el titular no responde por daños indirectos, pérdida de
+          datos o lucro cesante derivados del uso de la aplicación. Si Discord cambia su API, algunas
+          funciones pueden dejar de operar sin aviso.
+        </Parrafo>
+        <Parrafo>
+          Esta licencia termina automáticamente si incumples sus términos. En ese caso debes dejar de
+          usar el programa y destruir las copias que tengas.
+        </Parrafo>
+      </div>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 03 · Licencias de terceros
+// ============================================================
+
+interface Componente {
+  nombre: string
+  version: string
+  licencia: string
+  uso: string
+}
+
+/**
+ * Licencias leídas del campo `license` de cada paquete instalado
+ * (node_modules/<paquete>/package.json). No se deduce ninguna.
+ */
+const COMPONENTES: Componente[] = [
+  { nombre: '@pdf-lib/fontkit', version: '1.1.1', licencia: 'MIT', uso: 'Incrustar tipografías en los PDF exportados' },
+  { nombre: 'better-sqlite3', version: '11.10.0', licencia: 'MIT', uso: 'Base local: caché, cola e historial' },
+  { nombre: 'epub-gen-memory', version: '1.1.2', licencia: 'MIT', uso: 'Generar EPUB en memoria' },
+  { nombre: 'epubjs', version: '0.3.93', licencia: 'BSD-2-Clause', uso: 'Lectura de EPUB en el visor' },
+  { nombre: 'lucide-react', version: '1.8.0', licencia: 'ISC', uso: 'Iconografía de la interfaz' },
+  { nombre: 'pdf-lib', version: '1.17.1', licencia: 'MIT', uso: 'Composición de documentos PDF' },
+  { nombre: 'react-markdown', version: '10.1.0', licencia: 'MIT', uso: 'Renderizar el Markdown archivado' },
+  { nombre: 'react-syntax-highlighter', version: '16.1.1', licencia: 'MIT', uso: 'Resaltado de bloques de código' },
+  { nombre: 'rehype-raw', version: '7.0.0', licencia: 'MIT', uso: 'HTML incrustado dentro del Markdown' },
+  { nombre: 'remark-gfm', version: '4.0.1', licencia: 'MIT', uso: 'Tablas, tachado y enlaces automáticos' },
+  { nombre: 'sanitize-filename', version: '1.6.4', licencia: 'WTFPL OR ISC', uso: 'Nombres de archivo seguros al exportar' },
+  { nombre: 'sharp', version: '0.34.5', licencia: 'Apache-2.0', uso: 'Redimensionar y convertir imágenes' },
+  { nombre: 'zustand', version: '5.0.12', licencia: 'MIT', uso: 'Estado de la interfaz' },
+  { nombre: 'Electron', version: '34.5.8', licencia: 'MIT', uso: 'Contenedor de escritorio (Chromium y Node)' },
+  { nombre: 'React', version: '19.2.5', licencia: 'MIT', uso: 'Interfaz de usuario' },
+  { nombre: 'React DOM', version: '19.2.5', licencia: 'MIT', uso: 'Render de React sobre el DOM' },
+  { nombre: 'SQLite', version: '3.49.2', licencia: 'Public Domain', uso: 'Motor SQL embebido en better-sqlite3' }
+]
+
+function SeccionTerceros() {
+  return (
+    <Bloque icono={Package} titulo="Licencias de terceros" meta={`${COMPONENTES.length} componentes`}>
+      <Parrafo>
+        Estrato se apoya en software libre de terceros. Cada componente conserva su licencia original y
+        su aviso de copyright; los textos completos viajan con el paquete instalado en{' '}
+        <span className="mono">node_modules/&lt;paquete&gt;/LICENSE</span>. Esta tabla refleja lo que
+        declara cada paquete en su propio <span className="mono">package.json</span>.
+      </Parrafo>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Componente</th>
+              <th style={{ width: 96 }}>Versión</th>
+              <th style={{ width: 150 }}>Licencia</th>
+              <th>Uso dentro de Estrato</th>
+            </tr>
+          </thead>
+          <tbody>
+            {COMPONENTES.map((c) => (
+              <tr key={c.nombre}>
+                <td style={{ color: 'var(--fg)', whiteSpace: 'nowrap' }}>{c.nombre}</td>
+                <td className="mono" style={{ fontSize: 'var(--text-sm)', fontVariantNumeric: 'tabular-nums' }}>
+                  {c.version}
+                </td>
+                <td className="mono" style={{ fontSize: 'var(--text-sm)', whiteSpace: 'nowrap' }}>
+                  {c.licencia}
+                </td>
+                <td className="dim" style={{ fontSize: 'var(--text-sm)' }}>
+                  {c.uso}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <hr className="divider" />
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Atribuciones que exigen aviso</Rotulo>
+        <Lista>
+          <Punto>
+            <strong style={{ color: 'var(--fg)' }}>sharp</strong> — Apache License 2.0. Se conserva su
+            aviso de copyright y, si se redistribuye el binario, su archivo{' '}
+            <span className="mono">NOTICE</span>. La licencia Apache 2.0 incluye una concesión de
+            patentes y exige indicar los cambios realizados.
+          </Punto>
+          <Punto>
+            <strong style={{ color: 'var(--fg)' }}>epubjs</strong> — BSD 2-Clause. Se reproduce su aviso
+            de copyright y sus dos condiciones: conservar el aviso en las redistribuciones y no usar el
+            nombre de los autores para promocionar productos derivados.
+          </Punto>
+          <Punto>
+            <strong style={{ color: 'var(--fg)' }}>lucide-react</strong> — ISC. Se mantiene el aviso de
+            copyright y el permiso en todas las copias.
+          </Punto>
+          <Punto>
+            <strong style={{ color: 'var(--fg)' }}>SQLite</strong> — dominio público. No impone
+            condiciones de atribución.
+          </Punto>
+        </Lista>
+      </div>
+
+      <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+        Las licencias de terceros no modifican la licencia de Estrato: el programa sigue siendo
+        propietario, aunque incorpore componentes con licencias permisivas.
+      </p>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 04 · Privacidad y datos
+// ============================================================
+
+function SeccionPrivacidad() {
+  const [purgando, setPurgando] = useState(false)
+  const [resultado, setResultado] = useState<{ ok: boolean; texto: string } | null>(null)
+
+  // Purga la caché local a través del IPC existente (`cache:clear`).
+  // No toca los archivos exportados ni el token guardado.
+  const borrarDatos = async () => {
+    const confirmado = confirm(
+      'Se borrarán la caché de mensajes, archivos, usuarios y el historial de descargas terminadas.\n\n' +
+        'Los archivos ya exportados a tu carpeta de salida no se tocan.'
+    )
+    if (!confirmado) return
+
+    setPurgando(true)
+    setResultado(null)
+    try {
+      const respuesta = await window.api.cache.clear()
+      setResultado(
+        respuesta.success
+          ? { ok: true, texto: 'Caché local vaciada. La base quedó compactada.' }
+          : { ok: false, texto: respuesta.error || 'El proceso principal no devolvió detalle del fallo.' }
+      )
+    } catch (error) {
+      setResultado({
+        ok: false,
+        texto: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setPurgando(false)
+    }
+  }
+
+  return (
+    <Bloque icono={Lock} titulo="Privacidad y datos" meta="Sin servidor">
+      <Entradilla>Todo lo que Estrato sabe de ti vive en una sola carpeta de este equipo.</Entradilla>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué se guarda y dónde</Rotulo>
+        <div className="col" style={{ gap: 0 }}>
+          <Dato etiqueta="Token de Discord" valor="data/preferences.json · cifrado con DPAPI" />
+          <Dato etiqueta="Preferencias y rutas" valor="data/preferences.json · JSON en claro" />
+          <Dato etiqueta="Base de datos local" valor="data/estrato.db · SQLite con WAL" />
+          <Dato etiqueta="Archivos exportados" valor="La carpeta de salida que elijas" />
+        </div>
+        <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+          El token se cifra con <span className="mono">safeStorage</span>, que en Windows usa DPAPI y
+          queda ligado a tu usuario del sistema. Si el sistema no ofrece cifrado, se guarda codificado en
+          base64 sin cifrar; en ese caso conviene no compartir la carpeta{' '}
+          <span className="mono">data/</span>.
+        </p>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué no se envía a ningún sitio</Rotulo>
+        <Lista>
+          <Punto>No hay telemetría, analítica de uso ni identificadores de instalación.</Punto>
+          <Punto>No hay informe de errores a servidores propios ni de terceros.</Punto>
+          <Punto>
+            No hay servidor central: el programa no tiene backend al que pueda consultar tu actividad.
+          </Punto>
+          <Punto>
+            Las búsquedas del visor recorren el disco local; la consulta nunca sale del equipo.
+          </Punto>
+        </Lista>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué sale por la red</Rotulo>
+        <Parrafo>
+          Solo peticiones a la API oficial de Discord (<span className="mono">discord.com</span>) y
+          descargas desde su CDN de contenido (<span className="mono">cdn.discordapp.com</span> y{' '}
+          <span className="mono">media.discordapp.net</span>), que es donde viven las imágenes, los
+          vídeos y los avatares. Nada más.
+        </Parrafo>
+      </div>
+
+      <hr className="divider" />
+
+      <div className="col" style={{ gap: 'var(--sp-3)' }}>
+        <Rotulo>Borrar los datos</Rotulo>
+        <Parrafo>
+          El botón purga la caché de metadatos y el historial de descargas terminadas, y compacta la base.
+          No elimina los documentos ya exportados ni el token guardado.
+        </Parrafo>
+        <div className="row" style={{ gap: 'var(--sp-2)' }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => void borrarDatos()} disabled={purgando}>
+            {purgando ? 'Borrando…' : 'Borrar datos locales'}
+          </button>
+          {resultado && (
+            <span
+              className={resultado.ok ? 'badge badge--ok' : 'badge badge--err'}
+              style={{ height: 'auto', padding: '3px 8px', textTransform: 'none', letterSpacing: 0 }}
+            >
+              {resultado.texto}
+            </span>
+          )}
+        </div>
+        <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+          Para un borrado total, cierra la aplicación y elimina la carpeta{' '}
+          <span className="mono">data/</span> (junto al ejecutable en la versión portable). Eso arrastra
+          token, preferencias y base de datos; los archivos exportados se borran aparte, desde el
+          explorador. Cerrar sesión desde la aplicación elimina únicamente el token guardado.
+        </p>
+      </div>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 05 · Permisos y seguridad
+// ============================================================
+
+function SeccionPermisos() {
+  return (
+    <Bloque icono={ShieldCheck} titulo="Permisos y seguridad" meta="7 controles">
+      <Parrafo>
+        La interfaz se ejecuta como una página web sin privilegios: no puede tocar archivos, procesos ni
+        la red por su cuenta. Todo lo sensible ocurre en el proceso principal, detrás de un puente
+        explícito. Estos son los controles activos en la versión empaquetada.
+      </Parrafo>
+
+      <div className="col" style={{ gap: 0 }}>
+        <Verificacion titulo="Aislamiento de contexto">
+          <span className="mono">contextIsolation</span> está activo: el código de la interfaz y el del
+          preload viven en mundos separados y solo comparten lo que se expone por{' '}
+          <span className="mono">contextBridge</span>.
+        </Verificacion>
+
+        <Verificacion titulo="Sandbox del renderer">
+          El proceso de la ventana corre en sandbox y con{' '}
+          <span className="mono">nodeIntegration</span> desactivado: no hay <span className="mono">require</span>,{' '}
+          ni <span className="mono">process</span>, ni acceso al sistema de archivos desde la interfaz.
+        </Verificacion>
+
+        <Verificacion titulo="Política de seguridad de contenido">
+          En producción se inyecta una CSP que limita los scripts al propio paquete y la red a{' '}
+          <span className="mono">discord.com</span> y su CDN. Sin orígenes externos, sin{' '}
+          <span className="mono">eval</span> y sin objetos incrustados.
+        </Verificacion>
+
+        <Verificacion titulo="Protocolo archive:// confinado">
+          Las imágenes y los documentos del archivo se sirven por un protocolo propio que valida cada
+          ruta contra la carpeta de salida. Cualquier intento de salir de ella —incluidos enlaces
+          simbólicos— devuelve 403. El HTML archivado se sirve sin scripts.
+        </Verificacion>
+
+        <Verificacion titulo="Enlaces externos solo de Discord">
+          Abrir un enlace pasa por una lista blanca: <span className="mono">discord.com</span>,{' '}
+          <span className="mono">discordapp.com</span> y sus dominios de pruebas, además del esquema{' '}
+          <span className="mono">discord:</span>. Cualquier otro destino se descarta.
+        </Verificacion>
+
+        <Verificacion titulo="Sin navegación ni ventanas nuevas">
+          Las ventanas emergentes se deniegan, la navegación fuera de la aplicación se cancela y las
+          vistas web incrustadas se bloquean.
+        </Verificacion>
+
+        <Verificacion titulo="Permisos del sistema denegados">
+          Cámara, micrófono, ubicación, portapapeles y notificaciones del navegador se rechazan de raíz:
+          la aplicación no pide ninguno y el manejador de permisos responde siempre que no.
+        </Verificacion>
+      </div>
+
+      <div className="row" style={{ gap: 'var(--sp-2)', alignItems: 'flex-start' }}>
+        <Database size={14} strokeWidth={1.8} style={{ color: 'var(--fg-3)', marginTop: 3 }} aria-hidden="true" />
+        <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+          Las escrituras sobre el disco están acotadas a la carpeta de salida mediante comprobaciones de
+          ruta en el proceso principal; el renderer no recibe ninguna capacidad de escritura directa.
+        </p>
+      </div>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 06 · Términos de Discord
+// ============================================================
+
+function SeccionDiscord() {
+  return (
+    <Bloque icono={MessagesSquare} titulo="Términos de Discord" meta="Riesgo del usuario">
+      <div
+        className="row"
+        style={{
+          alignItems: 'flex-start',
+          gap: 'var(--sp-3)',
+          padding: 'var(--sp-3) var(--sp-4)',
+          border: '1px solid var(--line-strong)',
+          borderRadius: 'var(--r-md)',
+          background: 'var(--surface-2)'
+        }}
+      >
+        <TriangleAlert
+          size={15}
+          strokeWidth={1.8}
+          style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 2 }}
+          aria-hidden="true"
+        />
+        <div className="col" style={{ gap: 'var(--sp-2)' }}>
+          <span style={{ fontSize: 'var(--text-md)', color: 'var(--fg)' }}>
+            Automatizar una cuenta de usuario puede contravenir los Términos de Servicio de Discord.
+          </span>
+          <span className="dim" style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
+            Las consecuencias —advertencias, limitaciones o el cierre de la cuenta— recaen sobre quien
+            usa la herramienta, no sobre el programa. Ese riesgo es tuyo y conviene asumirlo con
+            información.
+          </span>
+        </div>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué hace exactamente la aplicación</Rotulo>
+        <Lista>
+          <Punto>
+            Lee canales, hilos y mensajes a los que tu cuenta ya tiene acceso. No descubre contenido
+            privado ni eleva privilegios.
+          </Punto>
+          <Punto>
+            No envía mensajes, no reacciona, no edita, no borra y no se une a ningún servidor.
+          </Punto>
+          <Punto>
+            Respeta los límites de peticiones de la API y espera cuando el servidor lo indica.
+          </Punto>
+          <Punto>
+            No elude captchas, verificaciones ni bloqueos: si Discord rechaza una petición, la operación
+            falla.
+          </Punto>
+        </Lista>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué se espera de ti</Rotulo>
+        <Lista>
+          <Punto>
+            Archiva solo contenido propio o aquel para el que tengas autorización de sus participantes y
+            de la comunidad.
+          </Punto>
+          <Punto>
+            No reduzcas los tiempos de espera entre peticiones por debajo de lo razonable: el límite
+            protege tanto tu cuenta como el servicio.
+          </Punto>
+          <Punto>
+            No uses la herramienta para vigilar a personas, recopilar datos personales ajenos ni
+            redistribuir conversaciones privadas.
+          </Punto>
+        </Lista>
+      </div>
+
+      <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+        Este apartado no es asesoramiento legal. Si tu uso tiene implicancias laborales, periodísticas o
+        comerciales, consulta los términos vigentes de Discord y, si hace falta, a un profesional.
+      </p>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// 07 · Contacto y soporte
+// ============================================================
+
+function SeccionContacto() {
+  return (
+    <Bloque icono={LifeBuoy} titulo="Contacto y soporte" meta="Local">
+      <Parrafo>
+        Estrato no tiene mesa de ayuda ni formulario web: el proyecto se mantiene en su propio
+        repositorio local. Los informes se registran ahí, con el detalle suficiente para poder
+        reproducir el problema.
+      </Parrafo>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Dónde reportar</Rotulo>
+        <Lista>
+          <Punto>
+            En el repositorio del proyecto, abriendo una incidencia con un título que describa el
+            síntoma, no la solución.
+          </Punto>
+          <Punto>
+            Si el problema es de privacidad o de seguridad, márcalo como tal antes de adjuntar capturas:
+            puede contener datos de terceros.
+          </Punto>
+        </Lista>
+      </div>
+
+      <div className="col" style={{ gap: 'var(--sp-2)' }}>
+        <Rotulo>Qué incluir en el informe</Rotulo>
+        <div className="col" style={{ gap: 0 }}>
+          <Dato etiqueta="Versión de Estrato" valor={VERSION} />
+          <Dato etiqueta="Sistema operativo" valor="Windows · versión y arquitectura" />
+          <Dato etiqueta="Pasos" valor="Qué hiciste, qué esperabas, qué ocurrió" />
+          <Dato etiqueta="Adjuntos" valor="Captura o mensaje de error, sin tokens" />
+        </div>
+      </div>
+
+      <div
+        className="row"
+        style={{
+          alignItems: 'flex-start',
+          gap: 'var(--sp-3)',
+          padding: 'var(--sp-3) var(--sp-4)',
+          border: '1px solid var(--line-soft)',
+          borderRadius: 'var(--r-md)',
+          background: 'var(--surface-2)'
+        }}
+      >
+        <KeyRound size={15} strokeWidth={1.8} style={{ color: 'var(--fg-3)', flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+        <p style={{ fontSize: 'var(--text-sm)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+          Nunca incluyas tu token de Discord en un informe. Si sospechas que se filtró, cámbialo desde
+          Discord y luego cierra sesión en Estrato: el token guardado se elimina al instante.
+        </p>
+      </div>
+
+      <div className="row" style={{ gap: 'var(--sp-2)', alignItems: 'flex-start' }}>
+        <HardDrive size={14} strokeWidth={1.8} style={{ color: 'var(--fg-3)', marginTop: 3 }} aria-hidden="true" />
+        <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+          Antes de reportar un fallo de archivado, revisa que la carpeta de salida exista y tenga
+          permisos de escritura; la mayoría de los errores de exportación vienen de ahí.
+        </p>
+      </div>
+    </Bloque>
+  )
+}
+
+// ============================================================
+// Vista
+// ============================================================
+
+export default function AboutView() {
+  const [activa, setActiva] = useState<SeccionId>('resumen')
+
+  return (
+    <>
+      <header className="workspace__header">
+        <div className="workspace__titles">
+          <div className="workspace__title">Legal y privacidad</div>
+          <div className="workspace__subtitle">
+            Licencia, tratamiento de datos y garantías de la aplicación
+          </div>
+        </div>
+        <div className="workspace__actions">
+          <span className="badge badge--accent">v{VERSION}</span>
+        </div>
+      </header>
+
+      <div className="workspace__body">
+        <div className="view-pad">
+          {/* Dos columnas que se apilan solas cuando la ventana es estrecha
+              (modo compacto): el índice nunca ahoga al contenido. */}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 'var(--sp-6)',
+              alignItems: 'flex-start'
+            }}
+          >
+            {/* Índice lateral: siete secciones, una activa */}
+            <nav
+              aria-label="Secciones legales"
+              style={{ position: 'sticky', top: 0, flex: '0 1 200px', minWidth: 148 }}
+            >
+              <div className="list">
+                {SECCIONES.map((s) => {
+                  const Icono = s.icono
+                  const seleccionada = s.id === activa
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={`list__row${seleccionada ? ' list__row--active' : ''}`}
+                      onClick={() => setActiva(s.id)}
+                      aria-current={seleccionada ? 'page' : undefined}
+                      style={{
+                        width: '100%',
+                        background: 'transparent',
+                        border: 0,
+                        textAlign: 'left',
+                        font: 'inherit',
+                        color: 'inherit'
+                      }}
+                    >
+                      <Icono
+                        size={15}
+                        strokeWidth={1.8}
+                        style={{ color: seleccionada ? 'var(--accent-fg)' : 'var(--fg-3)', flexShrink: 0 }}
+                        aria-hidden="true"
+                      />
+                      <span className="list__name" style={{ flex: 1 }}>
+                        {s.nombre}
+                      </span>
+                      <span className="list__meta mono">{s.numero}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </nav>
+
+            <div style={{ flex: '1 1 460px', minWidth: 0 }}>
+              {activa === 'resumen' && <SeccionResumen />}
+              {activa === 'licencia' && <SeccionLicencia />}
+              {activa === 'terceros' && <SeccionTerceros />}
+              {activa === 'privacidad' && <SeccionPrivacidad />}
+              {activa === 'permisos' && <SeccionPermisos />}
+              {activa === 'discord' && <SeccionDiscord />}
+              {activa === 'contacto' && <SeccionContacto />}
+
+              <p
+                className="dim"
+                style={{
+                  fontSize: 'var(--text-2xs)',
+                  lineHeight: 1.6,
+                  marginTop: 'var(--sp-4)',
+                  textAlign: 'right'
+                }}
+              >
+                Estrato {VERSION} · {ANIO} · Documento informativo, no asesoramiento legal
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }

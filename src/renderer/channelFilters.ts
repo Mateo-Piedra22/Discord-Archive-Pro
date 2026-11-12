@@ -8,7 +8,7 @@ export interface BrowseChannelRecipient {
 export interface BrowseChannelTag {
   id: string
   name: string
-  emoji_name: string | null
+  emoji_name?: string | null
 }
 
 export interface BrowseChannel {
@@ -79,6 +79,7 @@ function typeKeyForChannel(channel: BrowseChannel): ChannelTypeFilterKey {
     case 0:
       return 'text'
     case 2:
+    case 13:
       return 'voice'
     case 5:
       return 'announcement'
@@ -115,23 +116,15 @@ export function filterBrowseChannels(
   const nonCategories = channels.filter(c => c.type !== 4)
 
   const visible = nonCategories.filter(ch => {
-    // 1. Check if explicitly restricted (we got a 403 previously)
+    // 1. Comprobar si está restringido explícitamente (recibimos un 403 antes)
     if (filters.restrictedChannels?.has(ch.id)) return false
 
-    // 2. Filter out Tickets or Bots noise (unless searching for them)
-    const normalizedName = ch.name ? normalizeText(ch.name) : ''
-    if (q.length === 0 && (normalizedName.startsWith('ticket-') || normalizedName.includes('ticket-'))) {
-       return false
-    }
-
-    // 3. Strict Privacy Mode: Hide channels that are likely administrative or internal noise
+    // 2. Strict Privacy Mode (opt-in): sólo oculta tickets cerrados, es decir
+    //    "ticket-<dígitos>". No adivinamos por nombre (admin, staff, test…):
+    //    ocultar canales legítimos hacía que la app pareciera rota.
     if (filters.strictPrivacy && q.length === 0) {
-      if (normalizedName.startsWith('log-') || normalizedName.includes('-log')) return false
-      if (normalizedName.includes('admin') || normalizedName.includes('staff')) return false
-      if (normalizedName.includes('bot-') || normalizedName.includes('-bot')) return false
-      if (normalizedName.includes('mod-')) return false
-      if (normalizedName.includes('test')) return false
-      if (normalizedName.startsWith('audit-')) return false
+      const normalizedName = ch.name ? normalizeText(ch.name) : ''
+      if (/^ticket-\d+$/.test(normalizedName)) return false
     }
 
     if (!filters.showStandardChannels && isStandardChannelType(ch.type)) return false

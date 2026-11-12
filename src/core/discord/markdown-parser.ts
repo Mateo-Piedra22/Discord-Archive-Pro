@@ -1,6 +1,6 @@
 // ============================================================
-// Discord Markdown Parser — Converts Discord's custom markdown
-// to standard markdown with mention resolution.
+// Parser de Markdown de Discord — Convierte el markdown propio de
+// Discord a markdown estándar resolviendo las menciones.
 // ============================================================
 
 import type { DiscordUser, DiscordRole, DiscordEmbed, DiscordReaction, StickerItem } from './types'
@@ -9,7 +9,7 @@ import { ENDPOINTS } from './endpoints'
 interface ParserContext {
   users: Map<string, DiscordUser>
   roles: Map<string, DiscordRole>
-  channels: Map<string, string> // id -> name
+  channels: Map<string, string> // id -> nombre
   resolveUser?: (userId: string) => Promise<DiscordUser | null>
 }
 
@@ -32,31 +32,28 @@ export class DiscordMarkdownParser {
     if (ctx.resolveUser) this.context.resolveUser = ctx.resolveUser
   }
 
-  async parse(content: string): Promise<string> {
+  async parse(content: string, assetMap?: Map<string, string>): Promise<string> {
     if (!content) return ''
 
     let result = content
 
-    // Resolve user mentions: <@userId> or <@!userId>
+    // Resolver menciones de usuario: <@userId> o <@!userId>
     result = await this.resolveMentions(result)
 
-    // Resolve role mentions: <@&roleId>
+    // Resolver menciones de rol: <@&roleId>
     result = this.resolveRoleMentions(result)
 
-    // Resolve channel mentions: <#channelId>
+    // Resolver menciones de canal: <#channelId>
     result = this.resolveChannelMentions(result)
 
-    // Resolve timestamps: <t:timestamp:format>
+    // Resolver marcas de tiempo: <t:timestamp:format>
     result = this.resolveTimestamps(result)
 
-    // Resolve custom emojis: <:name:id> or <a:name:id>
-    result = this.resolveCustomEmojis(result)
+    // Resolver emojis personalizados: <:name:id> o <a:name:id>
+    result = this.resolveCustomEmojis(result, assetMap)
 
-    // Preserve Discord-specific formatting
+    // Conservar el formato específico de Discord
     result = this.convertSpoilers(result)
-
-    // Convert Discord underline (__text__) — careful not to conflict with bold
-    result = this.handleFormatting(result)
 
     return result
   }
@@ -80,7 +77,7 @@ export class DiscordMarkdownParser {
             username = `@${user.global_name || user.username}`
           }
         } catch {
-          // Keep as raw mention
+          // Se deja la mención sin procesar
         }
       }
 
@@ -115,33 +112,33 @@ export class DiscordMarkdownParser {
     const options: Intl.DateTimeFormatOptions = {}
 
     switch (format) {
-      case 't': // Short time: 9:41 PM
+      case 't': // Hora corta: 9:41 PM
         options.hour = 'numeric'
         options.minute = '2-digit'
         break
-      case 'T': // Long time: 9:41:30 PM
+      case 'T': // Hora larga: 9:41:30 PM
         options.hour = 'numeric'
         options.minute = '2-digit'
         options.second = '2-digit'
         break
-      case 'd': // Short date: 30/06/2021
+      case 'd': // Fecha corta: 30/06/2021
         options.day = '2-digit'
         options.month = '2-digit'
         options.year = 'numeric'
         break
-      case 'D': // Long date: June 30, 2021
+      case 'D': // Fecha larga: June 30, 2021
         options.day = 'numeric'
         options.month = 'long'
         options.year = 'numeric'
         break
-      case 'f': // Short date/time: June 30, 2021 9:41 PM
+      case 'f': // Fecha/hora corta: June 30, 2021 9:41 PM
         options.day = 'numeric'
         options.month = 'long'
         options.year = 'numeric'
         options.hour = 'numeric'
         options.minute = '2-digit'
         break
-      case 'F': // Long date/time: Wednesday, June 30, 2021 9:41 PM
+      case 'F': // Fecha/hora larga: Wednesday, June 30, 2021 9:41 PM
         options.weekday = 'long'
         options.day = 'numeric'
         options.month = 'long'
@@ -149,7 +146,7 @@ export class DiscordMarkdownParser {
         options.hour = 'numeric'
         options.minute = '2-digit'
         break
-      case 'R': // Relative
+      case 'R': // Relativa
         return this.relativeTime(date)
     }
 
@@ -179,34 +176,30 @@ export class DiscordMarkdownParser {
     return future ? `en ${days} días` : `hace ${days} días`
   }
 
-  private resolveCustomEmojis(text: string): string {
-    // Static emoji: <:name:id>
-    // Animated emoji: <a:name:id>
+  private resolveCustomEmojis(text: string, assetMap?: Map<string, string>): string {
+    // Emoji estático: <:name:id>
+    // Emoji animado: <a:name:id>
     return text.replace(/<(a?):(\w+):(\d+)>/g, (_match, animated: string, name: string, id: string) => {
-      const ext = animated === 'a' ? 'gif' : 'png'
       const url = ENDPOINTS.CUSTOM_EMOJI(id, animated === 'a')
-      return `![${name}](${url})`
+      return `![${name}](${this.resolveAsset(url, assetMap)})`
     })
   }
 
   private convertSpoilers(text: string): string {
-    // Discord spoilers ||text|| → HTML details for markdown
+    // Los spoilers de Discord ||texto|| → HTML details para markdown
     return text.replace(/\|\|(.+?)\|\|/gs, (_match, content: string) => {
       return `<details><summary>Spoiler</summary>\n\n${content.trim()}\n\n</details>`
     })
   }
 
-  private handleFormatting(text: string): string {
-    // Discord uses __ for underline, but standard markdown uses it for bold
-    // Convert Discord underline to HTML
-    // Be careful: __bold__ is valid markdown bold, so only convert if not already bold pattern
-    // Discord underline is actually rare, so we leave __text__ as-is (it renders as bold in standard MD)
-    return text
+  /** Devuelve la ruta relativa local si el recurso fue descargado; si no, la URL remota. */
+  private resolveAsset(url: string, assetMap?: Map<string, string>): string {
+    return assetMap?.get(url) || url
   }
 
-  // ----------- Embed to Markdown -----------
+  // ----------- Embed a Markdown -----------
 
-  embedToMarkdown(embed: DiscordEmbed): string {
+  embedToMarkdown(embed: DiscordEmbed, assetMap?: Map<string, string>): string {
     const parts: string[] = []
 
     parts.push('> ---')
@@ -240,11 +233,11 @@ export class DiscordMarkdownParser {
     }
 
     if (embed.image) {
-      parts.push(`> ![embed image](${embed.image.url})`)
+      parts.push(`> ![embed image](${this.resolveAsset(embed.image.url, assetMap)})`)
     }
 
     if (embed.thumbnail) {
-      parts.push(`> ![thumbnail](${embed.thumbnail.url})`)
+      parts.push(`> ![thumbnail](${this.resolveAsset(embed.thumbnail.url, assetMap)})`)
     }
 
     if (embed.footer) {
@@ -261,14 +254,14 @@ export class DiscordMarkdownParser {
     return parts.join('\n')
   }
 
-  // ----------- Reactions to Markdown -----------
+  // ----------- Reacciones a Markdown -----------
 
-  reactionsToMarkdown(reactions: DiscordReaction[]): string {
+  reactionsToMarkdown(reactions: DiscordReaction[], assetMap?: Map<string, string>): string {
     if (!reactions || reactions.length === 0) return ''
 
     const parts = reactions.map(r => {
       const emoji = r.emoji.id
-        ? `![${r.emoji.name}](${ENDPOINTS.CUSTOM_EMOJI(r.emoji.id, r.emoji.animated || false)})`
+        ? `![${r.emoji.name}](${this.resolveAsset(ENDPOINTS.CUSTOM_EMOJI(r.emoji.id, r.emoji.animated || false), assetMap)})`
         : r.emoji.name || '❓'
       return `${emoji} ${r.count}`
     })
@@ -276,18 +269,18 @@ export class DiscordMarkdownParser {
     return parts.join(' · ')
   }
 
-  // ----------- Stickers to Markdown -----------
+  // ----------- Stickers a Markdown -----------
 
-  stickerToMarkdown(sticker: StickerItem): string {
-    let ext: 'png' | 'gif' | 'json' = 'png'
-    if (sticker.format_type === 2) ext = 'png' // APNG treated as PNG
+  stickerToMarkdown(sticker: StickerItem, assetMap?: Map<string, string>): string {
+    let ext: 'png' | 'gif' = 'png'
+    if (sticker.format_type === 2) ext = 'png' // APNG tratado como PNG
     if (sticker.format_type === 4) ext = 'gif'
-    // Lottie (3) is JSON, skip for now
+    // Lottie (3) es JSON, se omite por ahora
     if (sticker.format_type === 3) {
       return `*[Sticker: ${sticker.name}]*`
     }
 
     const url = ENDPOINTS.STICKER(sticker.id, ext)
-    return `![Sticker: ${sticker.name}](${url})`
+    return `![Sticker: ${sticker.name}](${this.resolveAsset(url, assetMap)})`
   }
 }

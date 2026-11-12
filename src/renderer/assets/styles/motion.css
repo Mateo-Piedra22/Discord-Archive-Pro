@@ -1,0 +1,256 @@
+/* ============================================================
+   Movimiento — Estrato
+   Capa de animación cargada DESPUÉS de components.css: aquí solo
+   viven refuerzos, clases opt-in y estados transitorios. Ninguna
+   regla de este archivo mueve el layout: únicamente `opacity` y
+   `transform`. Nada de `will-change` permanente.
+   ============================================================ */
+
+:root {
+  /* Curva y duraciones propias del sistema de movimiento. */
+  --mo-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mo-rapido: 120ms;
+  --mo: 180ms;
+  --mo-lento: 260ms;
+}
+
+/* ==================== Fotogramas clave ==================== */
+
+/* Recorrido del brillo: sirve igual para esqueletos y barras. */
+@keyframes brillo {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* El degradado del acento se desplaza sin salir de su caja. */
+@keyframes desplazar {
+  0% { background-position: 0 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* Latido contenido para indicadores de actividad. */
+@keyframes pulso-escala {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+
+/* Halo que se abre y se apaga: punto de conexión activo. */
+@keyframes halo {
+  0% { box-shadow: 0 0 0 0 var(--ok-soft); }
+  70% { box-shadow: 0 0 0 5px rgba(86, 163, 119, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(86, 163, 119, 0); }
+}
+
+/* Aparición de una capa: fondo y escala, nunca desplazamiento. */
+@keyframes capa-entra {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Desmontaje reutilizable. */
+@keyframes salir {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px); }
+}
+
+/* ==================== Esqueletos ==================== */
+
+/* Redefinición del brillo: el degradado recorre la pieza completa.
+   Se ve correctamente sobre --surface-0 y --surface-1. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  animation: brillo 1.4s ease-in-out infinite;
+}
+
+/* ==================== Entrada de vistas ==================== */
+
+/* Clase opt-in para el contenedor de una vista.
+   OJO: no aplicar a contenedores que alberguen hijos `position: fixed`
+   (el visor de imágenes): un `transform` los convertiría en su bloque
+   de referencia y los recortaría. */
+.vista-entra {
+  animation: subir var(--mo-lento) var(--mo-ease) both;
+}
+
+/* El cuerpo del workspace solo funde: puede contener capas fijas. */
+.workspace__body {
+  animation: fundido var(--mo) var(--mo-ease);
+}
+
+/* ==================== Entrada escalonada de listas ==================== */
+
+/* `subir` se define en base.css (opacidad + 6 px). El escalonado se
+   corta en el octavo hijo para no retrasar listas largas. */
+.lista-entra > * {
+  animation: subir 220ms var(--mo-ease) both;
+}
+
+.lista-entra > *:nth-child(2) { animation-delay: 12ms; }
+.lista-entra > *:nth-child(3) { animation-delay: 24ms; }
+.lista-entra > *:nth-child(4) { animation-delay: 36ms; }
+.lista-entra > *:nth-child(5) { animation-delay: 48ms; }
+.lista-entra > *:nth-child(6) { animation-delay: 60ms; }
+.lista-entra > *:nth-child(7) { animation-delay: 72ms; }
+.lista-entra > *:nth-child(8) { animation-delay: 84ms; }
+
+/* ==================== Micro-interacciones de iconos ==================== */
+
+/* Solo `transform`: el hover de un icono no repinta la fila entera. */
+.btn svg,
+.rail__item svg,
+.nav-rail__item svg,
+.canales__fila svg,
+.list__row svg {
+  transition: transform 140ms var(--mo-ease);
+}
+
+.btn:hover:not(:disabled) svg,
+.rail__item:hover svg,
+.nav-rail__item:hover svg,
+.canales__fila:hover svg,
+.list__row:hover svg {
+  transform: translateY(-1px) scale(1.06);
+}
+
+.btn:active:not(:disabled) svg,
+.rail__item:active svg,
+.nav-rail__item:active svg,
+.canales__fila:active svg,
+.list__row:active svg {
+  transform: scale(0.96);
+}
+
+/* ==================== Acento vivo ==================== */
+
+/* Degradado cobre en movimiento lento. Uso deliberadamente escaso:
+   barra superior de la app e indicador del elemento activo. */
+.acento-vivo {
+  background: linear-gradient(100deg, var(--accent), #e0a86a, var(--accent));
+  background-size: 200% 100%;
+  animation: desplazar 6s linear infinite;
+}
+
+/* ==================== Pulsos ==================== */
+
+.pulso {
+  animation: pulso-escala 1.8s var(--mo-ease) infinite;
+}
+
+/* Punto de conexión cuando hay enlace con Discord. */
+.pulso-punto {
+  animation: halo 2.2s var(--mo-ease) infinite;
+}
+
+/* ==================== Barra de progreso viva ==================== */
+
+/* El brillo solo recorre el relleno mientras la descarga está activa. */
+.progress--activo .progress__fill {
+  background-image: linear-gradient(
+    90deg,
+    var(--accent) 25%,
+    var(--accent-hover) 50%,
+    var(--accent) 75%
+  );
+  background-size: 200% 100%;
+  animation: brillo 1.6s linear infinite;
+}
+
+/* ==================== Aparición de capas ==================== */
+
+/* Refuerzo sobre las reglas base de components.css (misma especificidad,
+   esta hoja carga después): 160 ms y escala 0.98 → 1. */
+.scrim {
+  animation: aparecer 160ms var(--mo-ease);
+}
+
+.dialogo {
+  animation: capa-entra 160ms var(--mo-ease);
+}
+
+/* ==================== Salida ==================== */
+
+/* Cualquier componente puede marcar su desmontaje con esta clase. */
+.saliendo {
+  animation: salir 140ms var(--mo-ease) both;
+  pointer-events: none;
+}
+
+/* ==================== Desplazamiento suave ==================== */
+
+/* Solo en los contenedores que realmente desplazan contenido. */
+.workspace__body,
+.chat__scroll,
+.split__body,
+.paleta__lista {
+  scroll-behavior: smooth;
+}
+
+/* ==================== Foco y selección ==================== */
+
+/* La transición se declara en el estado enfocado: el anillo entra
+   suavemente sin sobrescribir los `transition` de cada componente. */
+:focus-visible {
+  transition: box-shadow 140ms var(--mo-ease);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
+  transition: background-color var(--mo-rapido) var(--mo-ease);
+}
+
+/* ==================== Accesibilidad: movimiento reducido ==================== */
+
+/* Con movimiento reducido todo queda en su estado final, sin animar. */
+@media (prefers-reduced-motion: reduce) {
+  .vista-entra,
+  .lista-entra > *,
+  .acento-vivo,
+  .pulso,
+  .pulso-punto,
+  .saliendo,
+  .workspace__body,
+  .scrim,
+  .dialogo,
+  .skeleton,
+  .progress--activo .progress__fill {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
+  .btn svg,
+  .rail__item svg,
+  .nav-rail__item svg,
+  .canales__fila svg,
+  .list__row svg {
+    transition: none !important;
+  }
+
+  .btn:hover:not(:disabled) svg,
+  .rail__item:hover svg,
+  .nav-rail__item:hover svg,
+  .canales__fila:hover svg,
+  .list__row:hover svg,
+  .btn:active:not(:disabled) svg,
+  .rail__item:active svg,
+  .nav-rail__item:active svg,
+  .canales__fila:active svg,
+  .list__row:active svg {
+    transform: none !important;
+  }
+
+  .workspace__body,
+  .chat__scroll,
+  .split__body,
+  .paleta__lista {
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,47 +1,16 @@
 // ============================================================
-// HTML Generator — Self-contained HTML export with inline CSS.
-// Dark/light mode, responsive, zero external dependencies.
+// Generador de HTML — Exportación HTML autocontenida con CSS inline.
+// Modo oscuro/claro sin JavaScript (checkbox + label), responsive,
+// sin dependencias externas.
 // ============================================================
 
 import fs from 'fs'
 import path from 'path'
-import type { DiscordThread, DiscordMessage } from '../discord/types'
+import type { DiscordThread, DiscordMessage, DiscordReaction } from '../discord/types'
 
-export class HtmlGenerator {
-  private assetMap: Map<string, string>
-
-  constructor(assetMap: Map<string, string>) {
-    this.assetMap = assetMap
-  }
-
-  async generatePostHtml(
-    thread: DiscordThread,
-    messages: DiscordMessage[],
-    guildName: string,
-    channelName: string,
-    outputDir: string
-  ): Promise<string> {
-    const firstMessage = messages[0]
-    if (!firstMessage) return ''
-
-    const authorName = firstMessage.author.global_name || firstMessage.author.username
-    const dateStr = new Date(firstMessage.timestamp).toLocaleDateString('es-ES', {
-      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
-    })
-
-    let messagesHtml = ''
-    for (let i = 0; i < messages.length; i++) {
-      messagesHtml += this.messageToHtml(messages[i], i === 0)
-    }
-
-    const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${this.escapeHtml(thread.name)} — Discord Archive Pro</title>
-  <style>
-    :root {
+/** Variables de tema oscuro por defecto; el modo claro las sobreescribe. */
+const BASE_CSS = `
+    body {
       --bg: #1e1f22;
       --sidebar: #2b2d31;
       --chat: #313338;
@@ -63,7 +32,36 @@ export class HtmlGenerator {
       line-height: 1.375;
       font-size: 16px;
     }
-    .layout { display: flex; min-height: 100vh; overflow: hidden; height: 100vh; }
+    /* ---- Toggle de tema sin JS: #theme:checked ~ .layout ---- */
+    .theme-input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .theme-btn {
+      position: fixed; bottom: 1rem; right: 1rem;
+      background: var(--accent); color: #fff;
+      border-radius: 50%; width: 44px; height: 44px;
+      font-size: 1.1rem; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      display: flex; align-items: center; justify-content: center;
+      user-select: none; z-index: 50;
+    }
+    .theme-btn .sun { display: none; }
+    .theme-input:checked ~ .theme-btn .sun { display: inline; }
+    .theme-input:checked ~ .theme-btn .moon { display: none; }
+    .theme-input:focus-visible ~ .theme-btn { outline: 2px solid var(--text); outline-offset: 2px; }
+    .layout {
+      display: flex; min-height: 100vh; overflow: hidden; height: 100vh;
+      background: var(--bg);
+    }
+    #theme:checked ~ .layout {
+      --bg: #f2f3f5;
+      --sidebar: #e3e5e8;
+      --chat: #ffffff;
+      --card: #f2f3f5;
+      --input: #e3e5e8;
+      --text: #2e3338;
+      --text-muted: #4f5660;
+      --text-dim: #747f8d;
+      --border: rgba(0,0,0,0.1);
+    }
     .sidebar {
       width: 260px;
       background: var(--sidebar);
@@ -97,11 +95,11 @@ export class HtmlGenerator {
     .chat-header-icon { color: var(--text-muted); }
     .chat-header-name { font-size: 1rem; font-weight: 600; color: var(--text); }
     .chat-header-meta { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; display: flex; gap: 1rem; }
-    .messages { 
-      flex: 1; 
-      overflow-y: scroll; /* Force scroll visibility or availability */
+    .messages {
+      flex: 1;
+      overflow-y: scroll;
       -webkit-overflow-scrolling: touch;
-      padding: 1rem 0; 
+      padding: 1rem 0;
       background: var(--chat);
     }
     .message-group {
@@ -136,15 +134,20 @@ export class HtmlGenerator {
     .author-name { font-size: 1rem; font-weight: 600; color: var(--text); cursor: pointer; }
     .author-name:hover { text-decoration: underline; }
     .timestamp-label { font-size: 0.75rem; color: var(--text-dim); }
-    .message-content { font-size: 1rem; color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.375; }
+    .message-content { font-size: 1rem; color: var(--text); word-break: break-word; line-height: 1.375; }
     .message-content a { color: var(--accent); text-decoration: none; }
     .message-content a:hover { text-decoration: underline; }
-    .message-content code { background: #1e1f22; padding: 0.2em 0.4em; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.875em; }
-    .message-content pre { background: #1e1f22; padding: 0.75rem; border-radius: 4px; overflow-x: auto; margin: 0.5rem 0; border: 1px solid var(--border); }
+    .message-content code { background: rgba(0,0,0,0.25); padding: 0.2em 0.4em; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.875em; }
+    .message-content pre { background: rgba(0,0,0,0.25); padding: 0.75rem; border-radius: 4px; overflow-x: auto; margin: 0.5rem 0; border: 1px solid var(--border); }
     .message-content pre code { background: none; padding: 0; }
     .message-content strong { font-weight: 700; }
     .message-content em { font-style: italic; }
     .message-content del { text-decoration: line-through; }
+    .message-content h1 { font-size: 1.375rem; margin: 0.5rem 0 0.25rem; }
+    .message-content h2 { font-size: 1.125rem; margin: 0.5rem 0 0.25rem; }
+    .message-content h3 { font-size: 1rem; margin: 0.5rem 0 0.25rem; }
+    .message-content ul { margin: 0.25rem 0 0.25rem 1.25rem; }
+    .message-content li { margin: 0.125rem 0; }
     .attachment-container { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
     .attachment-image { max-width: 400px; max-height: 300px; border-radius: 4px; cursor: pointer; display: block; }
     .attachment-file {
@@ -183,14 +186,47 @@ export class HtmlGenerator {
       color: var(--text-dim);
       text-align: center;
     }
-    .footer a { color: var(--accent); text-decoration: none; }
-    .theme-btn { position: fixed; bottom: 1rem; right: 1rem; background: var(--accent); color: white; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 1.2rem; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; }
-    [data-light] body, body.light { filter: none; }
-    @media (prefers-color-scheme: light) { :root { --bg: #f2f3f5; --sidebar: #e3e5e8; --chat: #ffffff; --card: #f2f3f5; --input: #e3e5e8; --text: #2e3338; --text-muted: #4f5660; --text-dim: #747f8d; --border: rgba(0,0,0,0.1); } }
+    .footer a { color: var(--accent); text-decoration: none; }`
+
+export class HtmlGenerator {
+  private assetMap: Map<string, string>
+
+  constructor(assetMap: Map<string, string>) {
+    this.assetMap = assetMap
+  }
+
+  async generatePostHtml(
+    thread: DiscordThread,
+    messages: DiscordMessage[],
+    guildName: string,
+    channelName: string,
+    outputDir: string
+  ): Promise<string> {
+    const firstMessage = messages[0]
+    if (!firstMessage) return ''
+
+    const authorName = firstMessage.author.global_name || firstMessage.author.username
+    const dateStr = new Date(firstMessage.timestamp).toLocaleString('es-ES', {
+      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    })
+
+    let messagesHtml = ''
+    for (let i = 0; i < messages.length; i++) {
+      messagesHtml += this.messageToHtml(messages[i], i === 0)
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${this.escapeHtml(thread.name)} — Estrato</title>
+  <style>${BASE_CSS}
   </style>
 </head>
 <body>
-  <button class="theme-btn" onclick="this.closest('body').classList.toggle('light')" title="Toggle theme">&#9790;</button>
+  <input type="checkbox" id="theme" class="theme-input">
+  <label for="theme" class="theme-btn" title="Cambiar tema"><span class="moon">&#9790;</span><span class="sun">&#9728;</span></label>
   <div class="layout">
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -223,7 +259,7 @@ export class HtmlGenerator {
       <div class="messages">
         ${messagesHtml}
       </div>
-      <div class="footer">Archivado con <strong>Discord Archive Pro</strong> &mdash; ${new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+      <div class="footer">Archivado con <strong>Estrato</strong> &mdash; ${new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
     </section>
   </div>
 </body>
@@ -236,25 +272,13 @@ export class HtmlGenerator {
 
   private messageToHtml(msg: DiscordMessage, isOP: boolean): string {
     const authorName = msg.author.global_name || msg.author.username
-    const avatarInitial = authorName.charAt(0).toUpperCase()
     const dateStr = new Date(msg.timestamp).toLocaleString('es-ES', {
       day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
     })
 
-    const avatarHtml = msg.author.avatar
-      ? `<div class="avatar"><img src="https://cdn.discordapp.com/avatars/${msg.author.id}/${msg.author.avatar}.png?size=80" alt="" loading="lazy"></div>`
-      : `<div class="avatar" style="background:${this.hashColor(msg.author.id)}">${avatarInitial}</div>`
+    const contentHtml = this.renderMarkdown(msg.content || '')
 
-    let contentHtml = this.escapeHtml(msg.content || '')
-    contentHtml = contentHtml
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/~~(.+?)~~/g, '<del>$1</del>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\n/g, '<br>')
-
-    // Images inline
+    // Imágenes inline
     let attachmentsHtml = '<div class="attachment-container">'
     let hasAttachments = false
     for (const att of msg.attachments) {
@@ -278,20 +302,19 @@ export class HtmlGenerator {
     attachmentsHtml += '</div>'
     if (!hasAttachments) attachmentsHtml = ''
 
-    // Reactions
+    // Reacciones
     let reactionsHtml = ''
     if (msg.reactions && msg.reactions.length > 0) {
       reactionsHtml = '<div class="reactions">'
       for (const r of msg.reactions) {
-        const emoji = r.emoji.name || ''
-        reactionsHtml += `<div class="reaction">${this.escapeHtml(emoji)} <span class="reaction-count">${r.count}</span></div>`
+        reactionsHtml += `<div class="reaction">${this.reactionEmojiHtml(r)} <span class="reaction-count">${r.count}</span></div>`
       }
       reactionsHtml += '</div>'
     }
 
     return `
     <div class="message-group first-in-group${isOP ? ' op' : ''}">
-      ${avatarHtml}
+      ${this.avatarHtml(msg)}
       <div class="message-body">
         <div class="message-header-row">
           <span class="author-name">${this.escapeHtml(authorName)}</span>
@@ -303,6 +326,113 @@ export class HtmlGenerator {
         ${reactionsHtml}
       </div>
     </div>`
+  }
+
+  /** Emoji de reacción: local si fue descargado, si no el CDN de Discord. */
+  private reactionEmojiHtml(reaction: DiscordReaction): string {
+    if (!reaction.emoji.id) return this.escapeHtml(reaction.emoji.name || '')
+
+    const ext = reaction.emoji.animated ? 'gif' : 'png'
+    const url = `https://cdn.discordapp.com/emojis/${reaction.emoji.id}.${ext}`
+    const src = this.assetMap.get(url) || url
+    return `<img src="${this.escapeHtml(src)}" alt="" style="width:1.25em;height:1.25em;vertical-align:middle">`
+  }
+
+  /** Avatar local si fue descargado; si no, se mantiene la URL del CDN. */
+  private avatarHtml(msg: DiscordMessage): string {
+    const authorName = msg.author.global_name || msg.author.username
+    if (!msg.author.avatar) {
+      return `<div class="avatar" style="background:${this.hashColor(msg.author.id)}">${this.escapeHtml(authorName.charAt(0).toUpperCase())}</div>`
+    }
+
+    const base = `https://cdn.discordapp.com/avatars/${msg.author.id}/${msg.author.avatar}.png`
+    const local = this.assetMap.get(base)
+      || this.assetMap.get(`${base}?size=80`)
+      || this.assetMap.get(`${base}?size=128`)
+    const src = local || `${base}?size=80`
+
+    return `<div class="avatar"><img src="${this.escapeHtml(src)}" alt="" loading="lazy"></div>`
+  }
+
+  /**
+   * Markdown → HTML sobre texto ya escapado. Usa marcadores de posición para que las
+   * pasadas no interfieran entre sí (código, enlaces) y luego los restaura.
+   */
+  private renderMarkdown(raw: string): string {
+    const store: string[] = []
+    const hold = (html: string): string => `\u0000${store.push(html) - 1}\u0000`
+
+    // Énfasis y enlaces: línea a línea, sobre texto ya escapado
+    const inline = (line: string): string => line
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/~~(.+?)~~/g, '<del>$1</del>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) =>
+        hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`))
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+)/g, (_m, prefix: string, url: string) =>
+        `${prefix}${hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}`)
+
+    let text = this.escapeHtml(raw || '')
+
+    // 1. Bloques de código cercados
+    text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_m, code: string) =>
+      hold(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`))
+    // 2. Código inline
+    text = text.replace(/`([^`\n]+)`/g, (_m, code: string) => hold(`<code>${code}</code>`))
+
+    // 3. Bloques: encabezados, listas y citas (sin <br> entre etiquetas de bloque)
+    const out: string[] = []
+    let inList = false
+    let inQuote = false
+    let quoteLines: string[] = []
+    let plainRun = false
+
+    const block = (html: string): void => { plainRun = false; out.push(html) }
+    const plain = (html: string): void => {
+      if (plainRun) out.push('<br>')
+      out.push(html)
+      plainRun = true
+    }
+    const closeList = (): void => { if (inList) { out.push('</ul>'); inList = false } }
+    const closeQuote = (): void => {
+      if (!inQuote) return
+      out.push(`<blockquote>${quoteLines.join('<br>')}</blockquote>`)
+      quoteLines = []
+      inQuote = false
+    }
+
+    for (const line of text.split('\n')) {
+      const heading = /^(#{1,3})\s+(.+)$/.exec(line)
+      const item = /^[-*]\s+(.+)$/.exec(line)
+      const quote = /^&gt;\s?(.*)$/.exec(line)
+
+      if (heading) {
+        closeList(); closeQuote()
+        const level = heading[1].length
+        block(`<h${level}>${inline(heading[2])}</h${level}>`)
+      } else if (item) {
+        closeQuote()
+        if (!inList) { out.push('<ul>'); inList = true; plainRun = false }
+        out.push(`<li>${inline(item[1])}</li>`)
+      } else if (quote) {
+        closeList()
+        inQuote = true
+        quoteLines.push(inline(quote[1]))
+      } else if (line.trim() === '') {
+        // Línea vacía: separa párrafos (dos saltos) sin cerrar el run
+        closeList(); closeQuote()
+        if (plainRun) out.push('<br>')
+      } else {
+        closeList(); closeQuote()
+        plain(inline(line))
+      }
+    }
+    closeList(); closeQuote()
+    text = out.join('')
+
+    // 4. Restaurar marcadores de posición
+    return text.replace(/\u0000(\d+)\u0000/g, (_m, index: string) => store[Number(index)])
   }
 
   private hashColor(id: string): string {
@@ -332,7 +462,7 @@ export class HtmlGenerator {
   }
 
   private escapeHtml(str: string): string {
-    return str
+    return (str || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')

@@ -1,633 +1,731 @@
-import React, { useState } from 'react'
-import { 
-  FolderOutput, LogOut, Minus, Plus, Settings2, Database, 
-  Network, Palette, Layout, ShieldCheck, Download, 
-  Trash2, RefreshCw, Layers, LayoutList
-} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { LogOut, Minus, Moon, Plus, RotateCw, Sun, Trash2, Undo2 } from 'lucide-react'
 import { useDownloadStore } from '../stores/downloadStore'
 import { useBrowserStore } from '../stores/browserStore'
 import { useAuthStore } from '../stores/authStore'
 import { showToast } from './Toast'
+import type { DbStats, RateLimiterStats } from '../../shared/api'
+
+type Seccion = 'general' | 'export' | 'advanced' | 'system'
+
+const SECCIONES: { id: Seccion; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'export', label: 'Exportación' },
+  { id: 'advanced', label: 'Avanzado' },
+  { id: 'system', label: 'Sistema' }
+]
+
+const FORMATOS: { id: string; label: string; ext: string }[] = [
+  { id: 'markdown', label: 'Markdown', ext: '.md' },
+  { id: 'html', label: 'HTML', ext: '.html' },
+  { id: 'json', label: 'JSON', ext: '.json' },
+  { id: 'pdf', label: 'PDF', ext: '.pdf' },
+  { id: 'epub', label: 'EPUB', ext: '.epub' }
+]
+
+const CONTENIDO: { key: string; label: string; hint: string }[] = [
+  { key: 'text', label: 'Texto', hint: 'Cuerpo de los mensajes' },
+  { key: 'images', label: 'Imágenes', hint: 'Fotos y capturas adjuntas' },
+  { key: 'videos', label: 'Videos', hint: 'Clips adjuntos' },
+  { key: 'files', label: 'Archivos', hint: 'PDF, ZIP y otros adjuntos' },
+  { key: 'embeds', label: 'Embeds', hint: 'Previews de enlaces' },
+  { key: 'replies', label: 'Respuestas', hint: 'Mensajes citados y enlazados' },
+  { key: 'metadata', label: 'Metadatos', hint: 'IDs, reacciones y ediciones' },
+  { key: 'customEmojis', label: 'Emojis del servidor', hint: 'Emojis personalizados' },
+  { key: 'stickers', label: 'Stickers', hint: 'Stickers de Discord' },
+  { key: 'avatars', label: 'Avatares', hint: 'Fotos de perfil de los autores' }
+]
+
+const ESTRUCTURAS: { id: 'single' | 'separate' | 'both'; label: string; hint: string }[] = [
+  { id: 'single', label: 'Hilo unificado', hint: 'Un archivo por hilo, en orden cronológico' },
+  { id: 'separate', label: 'Un archivo por mensaje', hint: 'Un archivo por cada mensaje del hilo' },
+  { id: 'both', label: 'Ambos', hint: 'Genera las dos variantes de cada hilo' }
+]
+
+const FECHAS: { value: 'YYYY-MM-DD' | 'DD-MM-YYYY' | 'YYYYMMDD'; label: string; example: string }[] = [
+  { value: 'YYYY-MM-DD', label: 'ISO', example: '2026-11-11' },
+  { value: 'DD-MM-YYYY', label: 'Europeo', example: '11-11-2026' },
+  { value: 'YYYYMMDD', label: 'Compacto', example: '20261111' }
+]
+
+const TEMA_KEY = 'ui_theme'
+
+const MIN_ZOOM_FACTOR = 0.8
+const MAX_ZOOM_FACTOR = 2
+const ZOOM_STEP = 0.1
+
+function clampZoomFactor(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  const rounded = Math.round(value * 10) / 10
+  return Math.min(MAX_ZOOM_FACTOR, Math.max(MIN_ZOOM_FACTOR, rounded))
+}
+
+function readInitialZoomFactor(): number {
+  const saved = localStorage.getItem('ui_zoom_factor')
+  if (saved !== null && Number.isFinite(Number(saved))) return clampZoomFactor(Number(saved))
+
+  // Migración del formato antiguo (delta relativo, -1 … 2).
+  const legacy = localStorage.getItem('ui_zoom')
+  if (legacy !== null && Number.isFinite(Number(legacy))) {
+    const factor = clampZoomFactor(1 + Number(legacy))
+    localStorage.setItem('ui_zoom_factor', String(factor))
+    localStorage.removeItem('ui_zoom')
+    return factor
+  }
+
+  return 1
+}
+
+function readTheme(): 'dark' | 'light' {
+  return localStorage.getItem(TEMA_KEY) === 'light' ? 'light' : 'dark'
+}
 
 function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(i > 1 ? 1 : 0)} ${sizes[i]}`
+  if (!bytes || bytes <= 0) return '0 B'
+  const k = 1024
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(k)))
+  return `${(bytes / Math.pow(k, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`
+}
+
+function numero(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  return value.toLocaleString('es-AR')
 }
 
 export default function SettingsView() {
-  const {
-    outputDir, exportFormats, contentSelection, namingPattern, threadMode, includeToc,
-    maxConcurrent, maxFileSize, autoOpenFolder, preserveFilenames,
-    minimizeToTray, strictChannelFiltering,
-    setExportFormats, setContentSelection, setNamingPattern,
-    setThreadMode, setIncludeToc, setMaxConcurrent, setMaxFileSize,
-    setAutoOpenFolder, setPreserveFilenames, setMinimizeToTray, setStrictChannelFiltering,
-    pickDirectory, openOutputFolder
-  } = useDownloadStore()
-  const { showStandardChannels, setShowStandardChannels } = useBrowserStore()
-  const { user, logout } = useAuthStore()
-  const [dbStats, setDbStats] = useState<any>(null)
-  const [rateStats, setRateStats] = useState<any>(null)
-  const [zoomLevel, setZoomLevel] = useState<number>(() => {
-    const saved = localStorage.getItem('ui_zoom')
-    return saved ? Number(saved) : 0
-  })
+  const outputDir = useDownloadStore((s) => s.outputDir)
+  const exportFormats = useDownloadStore((s) => s.exportFormats)
+  const contentSelection = useDownloadStore((s) => s.contentSelection)
+  const threadMode = useDownloadStore((s) => s.threadMode)
+  const includeToc = useDownloadStore((s) => s.includeToc)
+  const maxConcurrent = useDownloadStore((s) => s.maxConcurrent)
+  const maxFileSize = useDownloadStore((s) => s.maxFileSize)
+  const autoOpenFolder = useDownloadStore((s) => s.autoOpenFolder)
+  const preserveFilenames = useDownloadStore((s) => s.preserveFilenames)
+  const minimizeToTray = useDownloadStore((s) => s.minimizeToTray)
+  const strictChannelFiltering = useDownloadStore((s) => s.strictChannelFiltering)
+  const dateFormat = useDownloadStore((s) => s.dateFormat)
+  const syncMode = useDownloadStore((s) => s.syncMode)
 
-  const [activeTab, setActiveTab] = useState<'general' | 'export' | 'advanced' | 'system'>('general')
+  const setExportFormats = useDownloadStore((s) => s.setExportFormats)
+  const setContentSelection = useDownloadStore((s) => s.setContentSelection)
+  const setThreadMode = useDownloadStore((s) => s.setThreadMode)
+  const setIncludeToc = useDownloadStore((s) => s.setIncludeToc)
+  const setMaxConcurrent = useDownloadStore((s) => s.setMaxConcurrent)
+  const setMaxFileSize = useDownloadStore((s) => s.setMaxFileSize)
+  const setDateFormat = useDownloadStore((s) => s.setDateFormat)
+  const setSyncMode = useDownloadStore((s) => s.setSyncMode)
+  const setAutoOpenFolder = useDownloadStore((s) => s.setAutoOpenFolder)
+  const setPreserveFilenames = useDownloadStore((s) => s.setPreserveFilenames)
+  const setMinimizeToTray = useDownloadStore((s) => s.setMinimizeToTray)
+  const setStrictChannelFiltering = useDownloadStore((s) => s.setStrictChannelFiltering)
+  const pickDirectory = useDownloadStore((s) => s.pickDirectory)
 
-  const handleZoom = (val: number) => {
-    const newVal = Math.max(-1, Math.min(2, val))
-    setZoomLevel(newVal)
-    localStorage.setItem('ui_zoom', newVal.toString())
-    window.api.window.setZoom(newVal)
-  }
+  const showStandardChannels = useBrowserStore((s) => s.showStandardChannels)
+  const setShowStandardChannels = useBrowserStore((s) => s.setShowStandardChannels)
 
-  const loadStats = async () => {
-    try {
-      const stats = await window.api.settings.getDbStats()
-      setDbStats(stats)
-      const rs = await window.api.settings.getRateLimiterStats()
-      setRateStats(rs)
-    } catch (e) {
-      console.error('Failed to load stats:', e)
-    }
-  }
+  const user = useAuthStore((s) => s.user)
+  const logout = useAuthStore((s) => s.logout)
 
-  React.useEffect(() => {
-    loadStats()
-    const intv = setInterval(loadStats, 5000)
-    return () => clearInterval(intv)
+  const [seccion, setSeccion] = useState<Seccion>('general')
+  const [zoomFactor, setZoomFactor] = useState<number>(readInitialZoomFactor)
+  const [tema, setTema] = useState<'dark' | 'light'>(readTheme)
+  const [siempreVisible, setSiempreVisible] = useState(false)
+  const [dbStats, setDbStats] = useState<DbStats | null>(null)
+  const [rateStats, setRateStats] = useState<RateLimiterStats | null>(null)
+  const [purgeError, setPurgeError] = useState<string | null>(null)
+  const [purging, setPurging] = useState(false)
+
+  // Estado real de la ventana: el interruptor debe reflejar lo que dice el main.
+  useEffect(() => {
+    void window.api.window.getState().then((estado) => setSiempreVisible(estado.alwaysOnTop))
   }, [])
 
-  const handleClearCache = async () => {
-    if (confirm('¿Estás seguro de que quieres borrar la caché local? Esto no borrará los archivos descargados.')) {
-      const res = await window.api.cache.clear()
-      if (res.success) {
-        showToast('Caché borrada correctamente', 'success')
-        loadStats()
+  const loadStats = useCallback(async () => {
+    try {
+      const [db, rate] = await Promise.all([
+        window.api.settings.getDbStats(),
+        window.api.settings.getRateLimiterStats()
+      ])
+      setDbStats(db)
+      setRateStats(rate)
+    } catch (error) {
+      console.error('No se pudieron leer las estadísticas:', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (seccion !== 'system') return
+    void loadStats()
+    // No consultamos la BD con la ventana oculta o minimizada.
+    const timer = setInterval(() => {
+      if (!document.hidden) void loadStats()
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [seccion, loadStats])
+
+  const handleZoom = (value: number) => {
+    const next = clampZoomFactor(value)
+    setZoomFactor(next)
+    localStorage.setItem('ui_zoom_factor', String(next))
+    window.api.window.setZoom(next)
+  }
+
+  const alternarTema = () => {
+    const next = tema === 'dark' ? 'light' : 'dark'
+    setTema(next)
+    localStorage.setItem(TEMA_KEY, next)
+    document.documentElement.dataset.theme = next
+  }
+
+  const restablecerVentana = async () => {
+    try {
+      const result = await window.api.window.resetState()
+      showToast(
+        result.success ? 'Ventana restablecida' : 'No se pudo restablecer la ventana',
+        result.success ? 'success' : 'error'
+      )
+    } catch {
+      showToast('No se pudo restablecer la ventana', 'error')
+    }
+  }
+
+  const toggleFormato = (id: string) => {
+    if (exportFormats.includes(id)) {
+      if (exportFormats.length > 1) setExportFormats(exportFormats.filter((f) => f !== id))
+      return
+    }
+    setExportFormats([...exportFormats, id])
+  }
+
+  const purgarCache = async () => {
+    if (!confirm('¿Borrar la caché local de metadatos? Los archivos exportados no se tocan.')) {
+      return
+    }
+    setPurging(true)
+    setPurgeError(null)
+    try {
+      const result = await window.api.cache.clear()
+      if (result.success) {
+        showToast('Caché purgada', 'success')
+        void loadStats()
       } else {
-        showToast('Error al borrar la caché', 'error')
+        setPurgeError(result.error || 'El backend no devolvió detalle del fallo.')
       }
+    } catch (error) {
+      setPurgeError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPurging(false)
     }
-  }
-
-  const toggleFormat = (f: string) => {
-    if (exportFormats.includes(f)) {
-      if (exportFormats.length > 1) setExportFormats(exportFormats.filter(x => x !== f))
-    } else {
-      setExportFormats([...exportFormats, f])
-    }
-  }
-
-  const contentLabels: Record<string, { label: string; desc: string; recommended: boolean }> = {
-    text:         { label: 'Texto', desc: 'Contenido textual de los mensajes', recommended: true },
-    images:       { label: 'Imágenes', desc: 'Fotos, GIFs y capturas adjuntadas', recommended: true },
-    replies:      { label: 'Respuestas', desc: 'Todos los mensajes de la conversación', recommended: true },
-    embeds:       { label: 'Embeds', desc: 'Previews de enlaces, iframes, etc.', recommended: true },
-    metadata:     { label: 'Metadata', desc: 'IDs, reacciones, ediciones', recommended: true },
-    files:        { label: 'Archivos', desc: 'PDF, ZIP y otros adjuntos', recommended: true },
-    videos:       { label: 'Videos', desc: 'Clips de video adjuntos', recommended: false },
-    stickers:     { label: 'Stickers', desc: 'Stickers de Discord', recommended: false },
-    customEmojis: { label: 'Emojis', desc: 'Emojis del servidor', recommended: false },
-    avatars:      { label: 'Avatares', desc: 'Fotos de perfil', recommended: false },
   }
 
   return (
-    <div className="settings-container" style={{ 
-      display: 'flex', height: '100%', overflow: 'hidden',
-      background: 'var(--bg-0)', animation: 'fadeIn 0.4s var(--ease)'
-    }}>
-      {/* Sidebar Navigation */}
-      <aside style={{ 
-        width: 220, borderRight: '1px solid var(--border)', 
-        background: 'rgba(0,0,0,0.1)', padding: '20px 0',
-        display: 'flex', flexDirection: 'column'
-      }}>
-        <div style={{ padding: '0 20px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ 
-            width: 32, height: 32, borderRadius: 8, 
-            background: 'var(--accent)', display: 'flex', 
-            alignItems: 'center', justifyContent: 'center' 
-          }}>
-            <Settings2 size={18} color="white" />
-          </div>
-          <span style={{ fontWeight: 700, color: 'var(--text-0)' }}>Ajustes</span>
+    <>
+      <header className="workspace__header">
+        <div className="workspace__titles">
+          <div className="workspace__title">Ajustes</div>
+          <div className="workspace__subtitle">Preferencias de archivado, exportación y sistema</div>
         </div>
+      </header>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 8px' }}>
-          {[
-            { id: 'general', label: 'General', icon: <Palette size={14} /> },
-            { id: 'export',  label: 'Exportación', icon: <Download size={14} /> },
-            { id: 'advanced', label: 'Avanzado', icon: <Layers size={14} /> },
-            { id: 'system',  label: 'Sistema', icon: <Database size={14} /> },
-          ].map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id as any)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px', border: 'none', borderRadius: 8,
-                background: activeTab === t.id ? 'var(--accent-dim)' : 'transparent',
-                color: activeTab === t.id ? 'var(--accent-text)' : 'var(--text-2)',
-                fontWeight: activeTab === t.id ? 700 : 500,
-                cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s'
-              }}
-            >
-              <span style={{ opacity: activeTab === t.id ? 1 : 0.6 }}>{t.icon}</span>
-              <span style={{ fontSize: '0.85rem' }}>{t.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div style={{ flex: 1 }} />
-
-        {/* User Card at bottom of sidebar */}
-        {user && (
-          <div style={{ 
-            margin: '0 12px 12px', padding: '12px', 
-            background: 'rgba(255,255,255,0.02)', borderRadius: 12,
-            border: '1px solid var(--border)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <div className="avatar" style={{ width: 32, height: 32 }}>
-                {user.avatar ? (
-                  <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`} alt="" />
-                ) : (
-                  <span>{(user.global_name || user.username).charAt(0).toUpperCase()}</span>
-                )}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ 
-                  fontSize: 12, fontWeight: 700, color: 'var(--text-0)', 
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' 
-                }}>
-                  {user.global_name || user.username}
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--green)', fontWeight: 600 }}>Conectado</div>
-              </div>
-            </div>
-            <button 
-              className="btn btn--danger btn--xs" 
-              style={{ width: '100%', gap: 6 }} 
-              onClick={() => { logout(); showToast('Sesión cerrada', 'info') }}
-            >
-              <LogOut size={12} /> Salir
-            </button>
-          </div>
-        )}
-      </aside>
-
-      {/* Main Content Area */}
-      <main style={{ 
-        flex: 1, overflowY: 'auto', padding: '40px 60px', position: 'relative',
-        background: 'radial-gradient(circle at top right, rgba(88, 101, 242, 0.05) 0%, transparent 40%)' 
-      }}>
-        {/* Animated Background Decor */}
-        <div style={{ position: 'absolute', top: 40, right: 60, opacity: 0.1, pointerEvents: 'none' }}>
-           <SettingsAnimation />
-        </div>
-        
-        {/* TAB: GENERAL */}
-        {activeTab === 'general' && (
-          <div style={{ maxWidth: 600, animation: 'fadeUp 0.3s var(--ease)' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-0)', marginBottom: 4 }}>General</h2>
-            <p style={{ color: 'var(--text-3)', fontSize: '0.9rem', marginBottom: 32 }}>Configura la apariencia y el comportamiento básico de la aplicación.</p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-              {/* Output Directory */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Ruta de descarga</h4>
-                <div 
-                  onClick={pickDirectory}
-                  style={{
-                    background: 'var(--bg-1)', border: '1px solid var(--border)',
-                    borderRadius: 12, padding: '16px', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    transition: 'all 0.2s', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                  }}
-                  className="settings-card-hover"
+      <div className="workspace__body">
+        <div className="view-pad">
+          <div className="section">
+            <div className="row">
+              {SECCIONES.map((item) => (
+                <button
+                  key={item.id}
+                  className={`chip${seccion === item.id ? ' chip--active' : ''}`}
+                  onClick={() => setSeccion(item.id)}
                 >
-                  <div style={{ 
-                    width: 36, height: 36, borderRadius: 10, 
-                    background: 'rgba(255,255,255,0.03)', display: 'flex', 
-                    alignItems: 'center', justifyContent: 'center', color: 'var(--accent)'
-                  }}>
-                    <FolderOutput size={20} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {outputDir || 'Seleccionar carpeta...'}
-                    </div>
-                  </div>
-                  <button className="btn btn--ghost btn--sm">Cambiar</button>
-                </div>
-              </section>
-
-              {/* UI Zoom */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Escala de interfaz</h4>
-                <div style={{ 
-                  background: 'var(--bg-1)', border: '1px solid var(--border)',
-                  borderRadius: 12, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ 
-                      width: 36, height: 36, borderRadius: 10, 
-                      background: 'rgba(255,255,255,0.03)', display: 'flex', 
-                      alignItems: 'center', justifyContent: 'center', color: 'var(--amber)'
-                    }}>
-                      <Layout size={20} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>Nivel de Zoom</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Ajusta el tamaño de la fuente y elementos.</div>
-                    </div>
-                  </div>
-                  <div className="stepper" style={{ background: 'rgba(0,0,0,0.2)', padding: 4, borderRadius: 10 }}>
-                    <button className="stepper__btn" style={{ width: 32, height: 32, border: 'none' }} onClick={() => handleZoom(zoomLevel - 0.25)}><Minus size={14} /></button>
-                    <span className="stepper__value" style={{ minWidth: 60 }}>{Math.round((1 + zoomLevel) * 100)}%</span>
-                    <button className="stepper__btn" style={{ width: 32, height: 32, border: 'none' }} onClick={() => handleZoom(zoomLevel + 0.25)}><Plus size={14} /></button>
-                  </div>
-                </div>
-              </section>
-
-              {/* Window Behavior */}
-              <section>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', margin: 0 }}>Ventana y Sistema</h4>
-                </div>
-                <div 
-                  onClick={() => setMinimizeToTray(!minimizeToTray)}
-                  style={{ 
-                    background: 'var(--bg-1)', border: '1px solid var(--border)',
-                    borderRadius: 12, padding: '16px', display: 'flex', alignItems: 'center', 
-                    justifyContent: 'space-between', cursor: 'pointer'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ 
-                      width: 36, height: 36, borderRadius: 10, 
-                      background: 'rgba(255,255,255,0.03)', display: 'flex', 
-                      alignItems: 'center', justifyContent: 'center', color: 'var(--accent)'
-                    }}>
-                      <Layout size={20} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>Minimizar a la bandeja</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Oculta la ventana al sistema en vez de cerrarla.</div>
-                    </div>
-                  </div>
-                  <div style={{ 
-                    width: 42, height: 22, borderRadius: 11, 
-                    background: minimizeToTray ? 'var(--accent)' : 'var(--bg-3)',
-                    position: 'relative', transition: 'all 0.3s'
-                  }}>
-                    <div style={{ 
-                      position: 'absolute', top: 2, left: minimizeToTray ? 22 : 2, 
-                      width: 18, height: 18, borderRadius: '50%', background: 'white',
-                      transition: 'all 0.2s', boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                    }} />
-                  </div>
-                </div>
-              </section>
+                  {item.label}
+                </button>
+              ))}
             </div>
-          </div>
-        )}
 
-        {/* TAB: EXPORT */}
-        {activeTab === 'export' && (
-          <div style={{ maxWidth: 600, animation: 'fadeUp 0.3s var(--ease)' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-0)', marginBottom: 4 }}>Exportación</h2>
-            <p style={{ color: 'var(--text-3)', fontSize: '0.9rem', marginBottom: 32 }}>Define qué datos guardar y en qué formatos envolverlos.</p>
+            {seccion === 'general' && (
+              <div className="section">
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Almacenamiento</span>
+                  </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-              {/* Formats Selection */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Formatos de archivo</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
-                  {[
-                    { k: 'markdown', l: 'Markdown', ext: '.md', desc: 'Universal y ligero (Estándar)', color: '#7289da' },
-                    { k: 'html',     l: 'HTML Interactive', ext: '.html', desc: 'Fiel a la interfaz original', color: '#e34c26' },
-                    { k: 'pdf',      l: 'PDF Premium', ext: '.pdf', desc: 'Resumen listo para imprimir', color: '#f40f02' },
-                    { k: 'epub',     l: 'E-Reader / Books', ext: '.epub', desc: 'Ideal para tablets y Kindle', color: '#9b59b6' },
-                    { k: 'json',     l: 'JSON Data', ext: '.json', desc: 'Solo datos crudos para desarrolladores', color: '#f1e05a' },
-                  ].map(f => {
-                    const active = exportFormats.includes(f.k)
-                    return (
-                      <div 
-                        key={f.k}
-                        onClick={() => toggleFormat(f.k)}
-                        style={{
-                          background: active ? 'rgba(88,101,242,0.08)' : 'var(--bg-1)',
-                          border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-                          borderRadius: 12, padding: '12px 14px', cursor: 'pointer',
-                          display: 'flex', gap: 12, transition: 'all 0.2s'
-                        }}
-                      >
-                        <div style={{ 
-                          width: 40, height: 40, borderRadius: 8, 
-                          background: active ? 'var(--accent)' : 'rgba(255,255,255,0.03)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          color: active ? 'white' : 'var(--text-3)', flexShrink: 0
-                        }}>
-                          <span style={{ fontWeight: 800, fontSize: 10 }}>{f.ext.toUpperCase()}</span>
-                        </div>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--accent-text)' : 'var(--text-1)' }}>{f.l}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.desc}</div>
-                        </div>
+                  <div className="setting-row" onClick={() => void pickDirectory()}>
+                    <div>
+                      <div className="setting-row__label">Carpeta de descargas</div>
+                      <div className="setting-row__hint mono truncate">
+                        {outputDir || 'Sin definir'}
                       </div>
-                    )
-                  })}
+                    </div>
+                    <span className="btn btn--sm">Cambiar</span>
+                  </div>
                 </div>
-              </section>
 
-              {/* Content Checklist */}
-              <section>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', margin: 0 }}>Filtros de contenido</h4>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)' }}>Recomendado: Todo activo</div>
-                </div>
-                <div style={{ 
-                  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', 
-                  gap: 8, background: 'rgba(0,0,0,0.1)', padding: 10, borderRadius: 12 
-                }}>
-                  {Object.entries(contentLabels).map(([key, meta]) => {
-                    const active = (contentSelection as any)[key]
-                    return (
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Interfaz</span>
+                  </div>
+
+                  <div className="setting-row">
+                    <div>
+                      <div className="setting-row__label">Escala de interfaz</div>
+                      <div className="setting-row__hint">Tamaño del texto y de los controles.</div>
+                    </div>
+                    <div className="stepper">
                       <button
-                        key={key}
-                        onClick={() => setContentSelection(key, !active)}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                          background: active ? 'var(--accent-dim)' : 'transparent',
-                          border: '1px solid rgba(255,255,255,0.03)', borderRadius: 8,
-                          cursor: 'pointer', textAlign: 'left', transition: 'all 0.1s'
-                        }}
+                        className="stepper__btn"
+                        title="Reducir"
+                        disabled={zoomFactor <= MIN_ZOOM_FACTOR}
+                        onClick={() => handleZoom(zoomFactor - ZOOM_STEP)}
                       >
-                        <div style={{ 
-                          width: 14, height: 14, borderRadius: 4, 
-                          background: active ? 'var(--accent)' : 'var(--bg-3)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          color: 'white', flexShrink: 0
-                        }}>
-                          {active && <span style={{ fontSize: 10 }}>✓</span>}
-                        </div>
-                        <span style={{ fontSize: 12, fontWeight: active ? 600 : 400, color: active ? 'var(--accent-text)' : 'var(--text-2)' }}>
-                          {meta.label}
-                        </span>
+                        <Minus size={14} strokeWidth={1.8} />
                       </button>
-                    )
-                  })}
-                </div>
-              </section>
+                      <span className="stepper__value">{Math.round(zoomFactor * 100)}%</span>
+                      <button
+                        className="stepper__btn"
+                        title="Aumentar"
+                        disabled={zoomFactor >= MAX_ZOOM_FACTOR}
+                        onClick={() => handleZoom(zoomFactor + ZOOM_STEP)}
+                      >
+                        <Plus size={14} strokeWidth={1.8} />
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Thread Mode Selection */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Estructura de archivos</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {[
-                    { k: 'single',   l: 'Hilo Unificado', desc: 'Todo en un solo archivo cronológico. Limpio y portátil.', icon: <Layout size={16} /> },
-                    { k: 'separate', l: 'Exportación Atómica', desc: 'Un archivo por mensaje. Diseñado para archivistas técnicos.', icon: <LayoutList size={16} /> },
-                    { k: 'both',     l: 'Paquete Completo (Recomendado)', desc: 'Genera ambos estilos. Máxima redundancia y acceso.', icon: <Layers size={16} /> },
-                  ].map(m => (
-                    <div 
-                      key={m.k}
-                      onClick={() => setThreadMode(m.k as any)}
-                      style={{
-                        background: 'var(--bg-1)', border: `1px solid ${threadMode === m.k ? 'var(--accent)' : 'var(--border)'}`,
-                        borderRadius: 12, padding: '14px 16px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 14, transition: 'all 0.2s'
-                      }}
-                    >
-                      <div style={{ 
-                        width: 18, height: 18, borderRadius: '50%',
-                        border: `2px solid ${threadMode === m.k ? 'var(--accent)' : 'var(--text-3)'}`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center'
-                      }}>
-                        {threadMode === m.k && <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: threadMode === m.k ? 'var(--accent-text)' : 'var(--text-1)' }}>{m.l}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{m.desc}</div>
+                  <div className="setting-row">
+                    <div>
+                      <div className="setting-row__label">Tema</div>
+                      <div className="setting-row__hint">
+                        {tema === 'dark' ? 'Tinta oscura' : 'Papel claro'}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-          </div>
-        )}
+                    <button className="btn btn--sm" onClick={alternarTema}>
+                      {tema === 'dark' ? (
+                        <Sun size={14} strokeWidth={1.8} />
+                      ) : (
+                        <Moon size={14} strokeWidth={1.8} />
+                      )}
+                      {tema === 'dark' ? 'Claro' : 'Oscuro'}
+                    </button>
+                  </div>
 
-        {/* TAB: ADVANCED */}
-        {activeTab === 'advanced' && (
-          <div style={{ maxWidth: 600, animation: 'fadeUp 0.3s var(--ease)' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-0)', marginBottom: 4 }}>Avanzado</h2>
-            <p style={{ color: 'var(--text-3)', fontSize: '0.9rem', marginBottom: 32 }}>Control quirúrgico sobre el proceso de sincronización y rendimiento.</p>
+                  <div className="setting-row" onClick={() => setMinimizeToTray(!minimizeToTray)}>
+                    <div>
+                      <div className="setting-row__label">Minimizar a la bandeja</div>
+                      <div className="setting-row__hint">
+                        Al cerrar, la ventana se oculta en lugar de salir.
+                      </div>
+                    </div>
+                    <span className={`switch${minimizeToTray ? ' switch--on' : ''}`} />
+                  </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              {/* Concurrent Downloads */}
-              <div style={{ 
-                background: 'var(--bg-1)', borderRadius: 16, padding: 20, 
-                border: '1px solid var(--border)', display: 'flex', 
-                alignItems: 'center', justifyContent: 'space-between' 
-              }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Sincronización Paralela</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Número de threads de descarga activos simultáneamente.</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: 10 }}>
-                  <button className="stepper__btn" style={{ border: 'none' }} onClick={() => setMaxConcurrent(Math.max(1, maxConcurrent - 1))}><Minus size={14} /></button>
-                  <span style={{ fontSize: 18, fontWeight: 800, minWidth: 24, textAlign: 'center' }}>{maxConcurrent}</span>
-                  <button className="stepper__btn" style={{ border: 'none' }} onClick={() => setMaxConcurrent(Math.min(10, maxConcurrent + 1))}><Plus size={14} /></button>
-                </div>
-              </div>
-
-              {/* Toggles */}
-              <div style={{ background: 'rgba(255,255,255,0.01)', borderRadius: 16, border: '1px solid var(--border)', overflow: 'hidden' }}>
-                {[
-                  { k: 'index', l: 'Generar Índice (_INDEX.md)', val: includeToc, set: setIncludeToc, icon: <LayoutList size={16} /> },
-                  { k: 'auto',  l: 'Auto-Abrir Carpeta', val: autoOpenFolder, set: setAutoOpenFolder, icon: <FolderOutput size={16} /> },
-                  { k: 'name',  l: 'Preservar Nombres Originales', val: preserveFilenames, set: setPreserveFilenames, icon: <Database size={16} /> },
-                  { k: 'strict', l: 'Privacidad Estricta (Ocultar prohibidos)', val: strictChannelFiltering, set: setStrictChannelFiltering, icon: <ShieldCheck size={16} /> },
-                ].map(item => (
-                  <div 
-                    key={item.k}
-                    onClick={() => item.set(!item.val)}
-                    style={{ 
-                      padding: '16px 20px', display: 'flex', alignItems: 'center', 
-                      justifyContent: 'space-between', borderBottom: '1px solid var(--border)',
-                      cursor: 'pointer'
+                  <div
+                    className="setting-row"
+                    onClick={() => {
+                      const siguiente = !siempreVisible
+                      setSiempreVisible(siguiente)
+                      window.api.window.setAlwaysOnTop(siguiente)
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <span style={{ opacity: item.val ? 1 : 0.4, color: item.val ? 'var(--accent)' : 'inherit' }}>{item.icon}</span>
-                      <span style={{ fontSize: 13, fontWeight: item.val ? 600 : 400 }}>{item.l}</span>
-                    </div>
-                    <div style={{ 
-                      width: 44, height: 22, borderRadius: 11, 
-                      background: item.val ? 'var(--accent)' : 'var(--bg-3)',
-                      position: 'relative', transition: 'all 0.3s'
-                    }}>
-                      <div style={{ 
-                        position: 'absolute', top: 2, left: item.val ? 24 : 2, 
-                        width: 18, height: 18, borderRadius: '50%', background: 'white',
-                        transition: 'all 0.2s', boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                      }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* EXPERIMENTAL: Standard Channels */}
-              <section style={{ 
-                marginTop: 10, padding: 20, borderRadius: 16, 
-                background: 'linear-gradient(135deg, rgba(240,178,50,0.05) 0%, rgba(240,178,50,0.02) 100%)',
-                border: '1px solid rgba(240,178,50,0.15)'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <Network size={16} color="var(--amber)" />
-                  <h4 style={{ margin: 0, fontSize: 14, color: 'var(--amber)', fontWeight: 800 }}>Modo Forzado (Canales Estándar)</h4>
-                </div>
-                <p style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5, marginBottom: 16 }}>
-                  Habilita el escaneo de canales de texto convencionales y mensajes directos. Esta función es experimental y puede causar bloqueos temporales por parte de Discord si se usa en servidores masivos.
-                </p>
-                <div 
-                  onClick={() => setShowStandardChannels(!showStandardChannels)}
-                  style={{ 
-                    display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
-                    padding: '10px 14px', background: 'rgba(0,0,0,0.2)', borderRadius: 10, width: 'fit-content'
-                  }}
-                >
-                  <div style={{ 
-                    width: 40, height: 20, borderRadius: 10, 
-                    background: showStandardChannels ? 'var(--amber)' : 'var(--bg-3)',
-                    position: 'relative'
-                  }}>
-                    <div style={{ 
-                      position: 'absolute', top: 2, left: showStandardChannels ? 22 : 2, 
-                      width: 16, height: 16, borderRadius: '50%', background: 'white',
-                      transition: 'all 0.2s'
-                    }} />
-                  </div>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: showStandardChannels ? 'var(--text-0)' : 'var(--text-3)' }}>
-                    {showStandardChannels ? 'ACTIVADO' : 'DESACTIVADO'}
-                  </span>
-                </div>
-              </section>
-            </div>
-          </div>
-        )}
-
-        {/* TAB: SYSTEM */}
-        {activeTab === 'system' && (
-          <div style={{ maxWidth: 600, animation: 'fadeUp 0.3s var(--ease)' }}>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-0)', marginBottom: 4 }}>Sistema</h2>
-            <p style={{ color: 'var(--text-3)', fontSize: '0.9rem', marginBottom: 32 }}>Mantenimiento de la base de datos local y monitoreo de la API.</p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              {/* Rate Limits */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Estado de la API (Discord)</h4>
-                <div style={{ 
-                  background: 'var(--bg-1)', borderRadius: 16, padding: 20, border: '1px solid var(--border)',
-                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20
-                }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Sincronización Global</span>
-                    <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--green)' }}>
-                      {rateStats?.global?.remaining ?? '—'} <span style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 400 }}>de {rateStats?.global?.limit ?? '—'}</span>
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Rutas Activas</span>
-                    <span style={{ fontSize: 20, fontWeight: 800 }}>{Object.keys(rateStats?.routes || {}).length}</span>
-                  </div>
-                </div>
-              </section>
-
-              {/* Database Stats Card */}
-              <section>
-                <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-3)', marginBottom: 12 }}>Almacenamiento Local</h4>
-                <div style={{ 
-                  background: 'var(--bg-1)', borderRadius: 16, overflow: 'hidden', border: '1px solid var(--border)' 
-                }}>
-                  <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
                     <div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Posts en Caché</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{dbStats?.totalPosts?.toLocaleString() ?? '—'}</div>
+                      <div className="setting-row__label">Mantener sobre otras ventanas</div>
+                      <div className="setting-row__hint">
+                        La ventana queda siempre en primer plano. Desactivado por defecto.
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Archivos Registrados</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{dbStats?.totalFiles?.toLocaleString() ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Mensajes Indexados</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{dbStats?.totalMessages?.toLocaleString() ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>Tamaño Total</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent-text)' }}>{dbStats ? formatBytes(dbStats.totalSize) : '—'}</div>
-                    </div>
+                    <span className={`switch${siempreVisible ? ' switch--on' : ''}`} />
                   </div>
-                  
-                  {/* Danger Zone */}
-                  <div style={{ 
-                    padding: '16px 20px', background: 'rgba(218, 55, 60, 0.05)', 
-                    borderTop: '1px solid rgba(218, 55, 60, 0.15)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <Trash2 size={16} color="var(--red)" />
-                      <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Limpieza preventiva de metadatos locales.</span>
+
+                  <div className="setting-row">
+                    <div>
+                      <div className="setting-row__label">Restablecer ventana</div>
+                      <div className="setting-row__hint">
+                        Devuelve la ventana a un tamaño y posición usables.
+                      </div>
                     </div>
-                    <button 
-                      className="btn btn--danger btn--sm" 
-                      style={{ gap: 6 }}
-                      onClick={handleClearCache}
-                    >
-                      <RefreshCw size={12} /> Purgar Caché
+                    <button className="btn btn--sm" onClick={() => void restablecerVentana()}>
+                      <Undo2 size={14} strokeWidth={1.8} />
+                      Restablecer
                     </button>
                   </div>
                 </div>
-              </section>
-            </div>
+
+                {user && (
+                  <div className="card">
+                    <div className="card__header">
+                      <span className="card__title">Cuenta</span>
+                    </div>
+                    <div className="setting-row">
+                      <div className="row">
+                        <span className="badge badge--accent">
+                          {(user.global_name || user.username).charAt(0).toUpperCase()}
+                        </span>
+                        <div>
+                          <div className="setting-row__label">
+                            {user.global_name || user.username}
+                          </div>
+                          <div className="setting-row__hint mono">@{user.username}</div>
+                        </div>
+                      </div>
+                      <button
+                        className="btn btn--danger btn--sm"
+                        onClick={() => {
+                          logout()
+                          showToast('Sesión cerrada', 'info')
+                        }}
+                      >
+                        <LogOut size={14} strokeWidth={1.8} />
+                        Cerrar sesión
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {seccion === 'export' && (
+              <div className="section">
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Formatos de salida</span>
+                  </div>
+                  <div className="card__body">
+                    <div className="row">
+                      {FORMATOS.map((formato) => (
+                        <button
+                          key={formato.id}
+                          className={`chip${exportFormats.includes(formato.id) ? ' chip--active' : ''}`}
+                          onClick={() => toggleFormato(formato.id)}
+                          title={formato.ext}
+                        >
+                          {formato.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="field__hint">
+                      Se genera al menos un formato. Cada uno añade su propio archivo al exportar.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Contenido a incluir</span>
+                  </div>
+                  {CONTENIDO.map((item) => {
+                    const activo = Boolean(contentSelection[item.key as keyof typeof contentSelection])
+                    return (
+                      <div
+                        key={item.key}
+                        className="setting-row"
+                        onClick={() => setContentSelection(item.key, !activo)}
+                      >
+                        <div>
+                          <div className="setting-row__label">{item.label}</div>
+                          <div className="setting-row__hint">{item.hint}</div>
+                        </div>
+                        <span className={`switch${activo ? ' switch--on' : ''}`} />
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Estructura de hilos</span>
+                  </div>
+                  {ESTRUCTURAS.map((item) => {
+                    const activo = threadMode === item.id
+                    return (
+                      <div
+                        key={item.id}
+                        className="setting-row"
+                        onClick={() => setThreadMode(item.id)}
+                      >
+                        <div>
+                          <div className="setting-row__label">{item.label}</div>
+                          <div className="setting-row__hint">{item.hint}</div>
+                        </div>
+                        {activo && <span className="badge badge--accent">Activo</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Nombres y límites</span>
+                  </div>
+                  <div className="card__body">
+                    <div className="field">
+                      <label className="field__label" htmlFor="ajuste-fecha">
+                        Formato de fecha
+                      </label>
+                      <select
+                        id="ajuste-fecha"
+                        className="select"
+                        value={dateFormat}
+                        onChange={(e) => setDateFormat(e.target.value)}
+                      >
+                        {FECHAS.map((fecha) => (
+                          <option key={fecha.value} value={fecha.value}>
+                            {fecha.label} — {fecha.example}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="field__hint">
+                        Se usa en los nombres de archivo generados al exportar.
+                      </span>
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="ajuste-tamano">
+                        Tamaño máximo por archivo (MB)
+                      </label>
+                      <input
+                        id="ajuste-tamano"
+                        className="input mono"
+                        type="number"
+                        min={0}
+                        step={10}
+                        value={maxFileSize}
+                        onChange={(e) =>
+                          setMaxFileSize(Math.max(0, Math.round(Number(e.target.value) || 0)))
+                        }
+                      />
+                      <span className="field__hint">
+                        Los adjuntos más grandes se omiten. 0 significa sin límite.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {seccion === 'advanced' && (
+              <div className="section">
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Rendimiento</span>
+                  </div>
+                  <div className="setting-row">
+                    <div>
+                      <div className="setting-row__label">Descargas simultáneas</div>
+                      <div className="setting-row__hint">
+                        Hilos que se procesan a la vez. Valores altos aumentan el riesgo de
+                        limitación por parte de Discord.
+                      </div>
+                    </div>
+                    <div className="stepper">
+                      <button
+                        className="stepper__btn"
+                        title="Reducir"
+                        disabled={maxConcurrent <= 1}
+                        onClick={() => setMaxConcurrent(maxConcurrent - 1)}
+                      >
+                        <Minus size={14} strokeWidth={1.8} />
+                      </button>
+                      <span className="stepper__value">{maxConcurrent}</span>
+                      <button
+                        className="stepper__btn"
+                        title="Aumentar"
+                        disabled={maxConcurrent >= 10}
+                        onClick={() => setMaxConcurrent(maxConcurrent + 1)}
+                      >
+                        <Plus size={14} strokeWidth={1.8} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Proceso de archivado</span>
+                  </div>
+
+                  <div
+                    className="setting-row"
+                    onClick={() => setPreserveFilenames(!preserveFilenames)}
+                  >
+                    <div>
+                      <div className="setting-row__label">Preservar nombres originales</div>
+                      <div className="setting-row__hint">
+                        Los adjuntos conservan el nombre con el que se subieron.
+                      </div>
+                    </div>
+                    <span className={`switch${preserveFilenames ? ' switch--on' : ''}`} />
+                  </div>
+
+                  <div
+                    className="setting-row"
+                    onClick={() => setSyncMode(syncMode === 'force' ? 'quick' : 'force')}
+                  >
+                    <div>
+                      <div className="setting-row__label">Reexportar siempre (forzar)</div>
+                      <div className="setting-row__hint">
+                        Ignora la caché y vuelve a generar los archivos aunque no haya cambios.
+                      </div>
+                    </div>
+                    <span className={`switch${syncMode === 'force' ? ' switch--on' : ''}`} />
+                  </div>
+
+                  <div
+                    className="setting-row"
+                    onClick={() => setStrictChannelFiltering(!strictChannelFiltering)}
+                  >
+                    <div>
+                      <div className="setting-row__label">Privacidad estricta de canales</div>
+                      <div className="setting-row__hint">
+                        Oculta los canales restringidos o sin permiso de lectura.
+                      </div>
+                    </div>
+                    <span className={`switch${strictChannelFiltering ? ' switch--on' : ''}`} />
+                  </div>
+
+                  <div
+                    className="setting-row"
+                    onClick={() => setAutoOpenFolder(!autoOpenFolder)}
+                  >
+                    <div>
+                      <div className="setting-row__label">Abrir carpeta al terminar</div>
+                      <div className="setting-row__hint">
+                        Abre el explorador en la carpeta de salida al completar la cola.
+                      </div>
+                    </div>
+                    <span className={`switch${autoOpenFolder ? ' switch--on' : ''}`} />
+                  </div>
+
+                  <div className="setting-row" onClick={() => setIncludeToc(!includeToc)}>
+                    <div>
+                      <div className="setting-row__label">Generar índice</div>
+                      <div className="setting-row__hint">
+                        Escribe un índice con los hilos y sus archivos en cada carpeta.
+                      </div>
+                    </div>
+                    <span className={`switch${includeToc ? ' switch--on' : ''}`} />
+                  </div>
+
+                  <div
+                    className="setting-row"
+                    onClick={() => setShowStandardChannels(!showStandardChannels)}
+                  >
+                    <div>
+                      <div className="setting-row__label">
+                        Explorar canales estándar
+                        <span className="badge badge--warn">Experimental</span>
+                      </div>
+                      <div className="setting-row__hint">
+                        Habilita canales de texto y mensajes directos en el explorador.
+                      </div>
+                    </div>
+                    <span className={`switch${showStandardChannels ? ' switch--on' : ''}`} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {seccion === 'system' && (
+              <div className="section">
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Base de datos local</span>
+                    <span className="spacer" />
+                    <button
+                      className="btn btn--ghost btn--sm btn--icon"
+                      title="Actualizar"
+                      onClick={() => void loadStats()}
+                    >
+                      <RotateCw size={14} strokeWidth={1.8} />
+                    </button>
+                  </div>
+                  <table className="table">
+                    <tbody>
+                      <tr>
+                        <td className="muted">Posts en caché</td>
+                        <td className="mono">{numero(dbStats?.totalPosts)}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Mensajes indexados</td>
+                        <td className="mono">{numero(dbStats?.totalMessages)}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Archivos registrados</td>
+                        <td className="mono">{numero(dbStats?.totalFiles)}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Tamaño total</td>
+                        <td className="mono">{dbStats ? formatBytes(dbStats.totalSize) : '—'}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Limitador de peticiones</span>
+                    <span className="spacer" />
+                    <span className={`badge ${rateStats ? 'badge--ok' : 'badge'}`}>
+                      {rateStats ? 'Activo' : 'Sin datos'}
+                    </span>
+                  </div>
+                  <table className="table">
+                    <tbody>
+                      <tr>
+                        <td className="muted">Peticiones totales</td>
+                        <td className="mono">{numero(rateStats?.totalRequests)}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Espera media</td>
+                        <td className="mono">
+                          {rateStats ? `${Math.round(rateStats.averageWaitMs)} ms` : '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Hits de rate limit</td>
+                        <td className="mono">{numero(rateStats?.rateLimitHits)}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Rutas registradas</td>
+                        <td className="mono">
+                          {rateStats ? numero(Object.keys(rateStats.routes).length) : '—'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
+                    <span className="card__title">Mantenimiento</span>
+                  </div>
+                  <div className="card__body">
+                    <div className="row">
+                      <div className="col">
+                        <div className="setting-row__label">Purgar caché de metadatos</div>
+                        <div className="setting-row__hint">
+                          Borra el índice local de posts y mensajes. Los archivos exportados no se
+                          modifican.
+                        </div>
+                      </div>
+                      <span className="spacer" />
+                      <button
+                        className="btn btn--danger btn--sm"
+                        onClick={() => void purgarCache()}
+                        disabled={purging}
+                      >
+                        <Trash2 size={14} strokeWidth={1.8} />
+                        {purging ? 'Purgando…' : 'Purgar caché'}
+                      </button>
+                    </div>
+                    {purgeError && <div className="field__hint dim">{purgeError}</div>}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-
-      </main>
-
-    </div>
-  )
-}
-
-function SettingsAnimation() {
-  return (
-    <div className="settings-anim">
-      <div className="settings-anim__gear settings-anim__gear--lg">
-        <Settings2 size={120} strokeWidth={0.5} />
+        </div>
       </div>
-      <div className="settings-anim__gear settings-anim__gear--sm">
-        <Settings2 size={60} strokeWidth={1} />
-      </div>
-      <style>{`
-        .settings-anim {
-          position: relative; width: 140px; height: 140px;
-        }
-        .settings-anim__gear {
-          position: absolute; color: var(--accent);
-        }
-        .settings-anim__gear--lg {
-          top: 0; left: 0; animation: spin 20s linear infinite;
-        }
-        .settings-anim__gear--sm {
-          bottom: 0; right: 0; animation: spin-reverse 10s linear infinite;
-        }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes spin-reverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
-      `}</style>
-    </div>
+    </>
   )
 }

@@ -1,6 +1,5 @@
 // ============================================================
-// Progress Tracker — Multi-level progress tracking with
-// speed calculation and ETA estimation.
+// Seguimiento de progreso — progreso por fases, velocidad y ETA.
 // ============================================================
 
 export interface PostProgress {
@@ -16,7 +15,7 @@ export interface PostProgress {
   eta: number
 }
 
-class TaskTracker {
+export class TaskTracker {
   private progress: PostProgress = {
     phase: 'fetching',
     messagesTotal: 0,
@@ -29,16 +28,13 @@ class TaskTracker {
     eta: 0
   }
 
-  private bytesHistory: { time: number; bytes: number }[] = []
+  private samples: { time: number; bytes: number }[] = []
 
   update(partial: Partial<PostProgress>): void {
     Object.assign(this.progress, partial)
     if (partial.bytesDownloaded !== undefined) {
-      this.bytesHistory.push({ time: Date.now(), bytes: partial.bytesDownloaded })
-      // Keep last 20 entries for moving average
-      if (this.bytesHistory.length > 20) {
-        this.bytesHistory = this.bytesHistory.slice(-20)
-      }
+      this.samples.push({ time: Date.now(), bytes: partial.bytesDownloaded })
+      if (this.samples.length > 20) this.samples.shift()
     }
   }
 
@@ -47,12 +43,12 @@ class TaskTracker {
   }
 
   getSpeed(): number {
-    if (this.bytesHistory.length < 2) return 0
-    const first = this.bytesHistory[0]
-    const last = this.bytesHistory[this.bytesHistory.length - 1]
+    if (this.samples.length < 2) return 0
+    const first = this.samples[0]
+    const last = this.samples[this.samples.length - 1]
     const elapsed = (last.time - first.time) / 1000
     if (elapsed <= 0) return 0
-    return (last.bytes - first.bytes) / elapsed
+    return Math.max(0, (last.bytes - first.bytes) / elapsed)
   }
 
   getEta(): number {
@@ -60,7 +56,7 @@ class TaskTracker {
     if (speed <= 0) return 0
     const remaining = this.progress.bytesTotal - this.progress.bytesDownloaded
     if (remaining <= 0) return 0
-    return remaining / speed
+    return Math.round(remaining / speed)
   }
 }
 

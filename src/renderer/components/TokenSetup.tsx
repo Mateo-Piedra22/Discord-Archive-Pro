@@ -1,263 +1,372 @@
-import React, { useState, useEffect } from 'react'
+import { useState, type FormEvent } from 'react'
+import {
+  ArrowRight, Eye, EyeOff, KeyRound, Loader2, LogIn, ScanSearch, ShieldCheck
+} from 'lucide-react'
+import type { DetectedToken, DetectionDiagnostic } from '../../shared/api'
 import { useAuthStore } from '../stores/authStore'
 import { showToast } from './Toast'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Key, Shield, Cpu, Zap, ArrowRight, Eye, EyeOff, Search, Loader2, Sparkles, CheckCircle2 } from 'lucide-react'
-import confetti from 'canvas-confetti'
 
-/**
- * Premium TokenSetup Component
- * 
- * Re-architected in Stack 2026 for Discord Archive Pro.
- * Provides a production-grade onboarding experience with:
- * - High-fidelity animations using Framer Motion
- * - Glassmorphic design and animated gradients
- * - Auto-detection with visual feedback
- * - Particle effects on successful connection
- */
+/** Punto de estado por fuente: descifrado, encontrado sin descifrar, ausente. */
+function estadoFuente(diagnostico: DetectionDiagnostic): string {
+  if (diagnostico.decrypted) return 'dot--ok'
+  if (diagnostico.found) return 'dot--warn'
+  return 'dot--err'
+}
+
+function avatarUrl(token: DetectedToken): string | null {
+  const usuario = token.user
+  if (!usuario?.avatar) return null
+  return `https://cdn.discordapp.com/avatars/${usuario.id}/${usuario.avatar}.png?size=64`
+}
+
+function inicial(token: DetectedToken): string {
+  const nombre = token.user?.global_name || token.user?.username || '?'
+  return nombre.charAt(0).toUpperCase()
+}
+
 export default function TokenSetup() {
-  const [token, setTokenInput] = useState('')
-  const [showToken, setShowToken] = useState(false)
-  const [detecting, setDetecting] = useState(false)
-  const [detectedTokens, setDetectedTokens] = useState<{ source: string; token: string; user?: any }[]>([])
-  const [detectError, setDetectError] = useState<string | null>(null)
-  
   const { setToken, status, error } = useAuthStore()
 
-  // Success celebration effect
-  useEffect(() => {
-    if (status === 'connected') {
-      confetti({
-        particleCount: 150,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#5865F2', '#ffffff', '#43b581']
-      })
-    }
-  }, [status])
+  const [valor, setValor] = useState('')
+  const [visible, setVisible] = useState(false)
+  const [detectando, setDetectando] = useState(false)
+  const [diagnosticos, setDiagnosticos] = useState<DetectionDiagnostic[]>([])
+  const [detectados, setDetectados] = useState<DetectedToken[]>([])
+  const [errorDeteccion, setErrorDeteccion] = useState<string | null>(null)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!token.trim()) return
-    const success = await setToken(token.trim())
-    if (success) showToast('Conexión establecida con éxito', 'success')
+  const ocupado = status === 'connecting'
+
+  const conectar = async (token: string): Promise<void> => {
+    const ok = await setToken(token)
+    if (ok) showToast('Sesión conectada', 'success')
   }
 
-  const handleAutoDetect = async () => {
-    setDetecting(true)
-    setDetectError(null)
-    setDetectedTokens([])
+  const enviarManual = async (evento: FormEvent) => {
+    evento.preventDefault()
+    const limpio = valor.trim()
+    if (!limpio) return
+    await conectar(limpio)
+  }
+
+  const detectar = async () => {
+    setDetectando(true)
+    setErrorDeteccion(null)
+    setDiagnosticos([])
+    setDetectados([])
+
     try {
-      const result = await window.api.tokenDetector.detect()
-      if (result.success && result.tokens.length > 0) {
-        setDetectedTokens(result.tokens)
-        // Auto-select if only one valid token found
-        if (result.tokens.length === 1) {
-          handleSelectDetected(result.tokens[0].token)
-        } else {
-          showToast(`Se han detectado ${result.tokens.length} sesiones`, 'info')
-        }
-      } else if (result.success) {
-        setDetectError('No se detectaron sesiones activas. Abre Discord Desktop e intenta de nuevo.')
-      } else {
-        setDetectError(result.error || 'Fallo en el motor de detección')
-      }
-    } catch (err: any) {
-      setDetectError(err.message || 'Error de comunicación con el sistema')
-    } finally {
-      setTimeout(() => setDetecting(false), 800) // Aesthetic delay for smoothness
-    }
-  }
+      const resultado = await window.api.tokenDetector.detect()
+      const fuentes = resultado.diagnostics ?? []
+      const sesiones = (resultado.tokens ?? []).filter((t) => t.valid)
 
-  const handleSelectDetected = async (t: string) => {
-    const success = await setToken(t)
-    if (success) showToast('Vinculación automática completada', 'success')
+      setDiagnosticos(fuentes)
+      setDetectados(sesiones)
+
+      if (!resultado.success || (fuentes.length === 0 && sesiones.length === 0)) {
+        setErrorDeteccion(resultado.error || 'No se encontraron sesiones de Discord en este equipo.')
+      } else if (sesiones.length === 0) {
+        setErrorDeteccion('Las instalaciones se detectaron, pero ninguna sesión pudo descifrarse. Usa el token manual.')
+      }
+    } catch (fallo) {
+      const mensaje = fallo instanceof Error ? fallo.message : 'Error de comunicación con el sistema.'
+      setErrorDeteccion(mensaje)
+    } finally {
+      setDetectando(false)
+    }
   }
 
   return (
-    <div className="setup-container">
-      {/* Dynamic Background Elements */}
-      <div className="setup-bg-blobs">
-        <div className="blob blob-1"></div>
-        <div className="blob blob-2"></div>
-      </div>
+    <div style={{ height: '100%', overflowY: 'auto', background: 'var(--surface-0)' }}>
+      <style>{`
+        @keyframes dap-spin { to { transform: rotate(360deg); } }
+        .dap-spin { animation: dap-spin 900ms linear infinite; }
+      `}</style>
 
-      <motion.div 
-        className="setup-content"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+      <div
+        style={{
+          maxWidth: 760,
+          margin: '0 auto',
+          padding: 'var(--sp-10) var(--sp-6)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 'var(--sp-5)'
+        }}
       >
-        {/* Brand Header */}
-        <header className="setup-header">
-          <motion.div 
-            className="setup-brand-icon"
-            whileHover={{ scale: 1.05, rotate: 5 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <div className="icon-inner">
-              <Zap size={28} fill="currentColor" />
-            </div>
-            <div className="icon-glow" />
-          </motion.div>
-          
-          <h1 className="setup-title">Discord Archive Pro</h1>
-          <p className="setup-tagline">Preservación digital de alta fidelidad</p>
+        {/* ---------- Encabezado ---------- */}
+        <header className="col" style={{ gap: 'var(--sp-2)' }}>
+          <span className="section__title">Acceso</span>
+          <h1 style={{ fontSize: 'var(--text-2xl)', letterSpacing: '-0.02em' }}>Estrato</h1>
+          <p className="muted" style={{ fontSize: 'var(--text-md)', lineHeight: 1.6, maxWidth: 540 }}>
+            Archivo local de servidores, canales e hilos. Conecta tu cuenta para empezar a exportar.
+            La aplicación trabaja con tu propio token y no interviene ningún servidor intermedio.
+          </p>
         </header>
 
-        <div className="setup-main-grid">
-          {/* Automatic Detection Module */}
-          <section className="setup-module detection-module">
-            <div className="module-header">
-              <Cpu size={18} className="icon-accent" />
-              <h3>Sincronización Inteligente</h3>
-            </div>
-            
-            <p className="module-desc">
-              Escanea tu entorno local para encontrar sesiones activas de Discord de forma segura y privada.
-            </p>
+        <hr className="divider" />
 
-            <button
-              className={`btn-premium ${detecting ? 'btn-premium--loading' : ''}`}
-              onClick={handleAutoDetect}
-              disabled={detecting || status === 'connecting'}
-            >
-              <span className="btn-content">
-                {detecting ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <Search size={18} />
-                )}
-                <span>{detecting ? 'Escaneando...' : 'Detectar Sesiones'}</span>
-              </span>
-              <div className="btn-shine" />
-            </button>
+        {/* ---------- Dos caminos ---------- */}
+        <div className="grid grid--cards">
+          {/* --- Detección automática --- */}
+          <section className="card col" style={{ minWidth: 0 }}>
+            <header className="card__header">
+              <ScanSearch size={15} strokeWidth={1.8} style={{ color: 'var(--fg-3)' }} />
+              <span className="card__title">Detección automática</span>
+            </header>
 
-            <AnimatePresence>
-              {detectedTokens.length > 0 && (
-                <motion.div 
-                  className="detection-results"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                >
-                  <div className="results-label">Cuentas encontradas:</div>
-                  {detectedTokens.map((dt, i) => (
-                    <motion.div 
-                      key={i} 
-                      className="account-pill" 
-                      onClick={() => handleSelectDetected(dt.token)}
-                      whileHover={{ x: 4, background: 'rgba(255,255,255,0.08)' }}
-                    >
-                      <div className="account-avatar">
-                        {dt.user?.avatar ? (
-                          <img src={`https://cdn.discordapp.com/avatars/${dt.user.id}/${dt.user.avatar}.png?size=64`} alt="" />
-                        ) : (
-                          <div className="avatar-placeholder">{(dt.user?.global_name || dt.user?.username || '?').charAt(0)}</div>
-                        )}
-                      </div>
-                      <div className="account-info">
-                        <span className="account-name">{dt.user?.global_name || dt.user?.username}</span>
-                        <span className="account-meta">{dt.source}</span>
-                      </div>
-                      <ArrowRight size={14} className="account-arrow" />
-                    </motion.div>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <div className="card__body col" style={{ gap: 'var(--sp-3)', flex: 1 }}>
+              <p className="muted" style={{ fontSize: 'var(--text-sm)', lineHeight: 1.55 }}>
+                Revisa Discord Desktop, Discord Canary y los navegadores instalados en busca de una
+                sesión abierta. El análisis ocurre en este equipo.
+              </p>
 
-            {detectError && (
-              <motion.div 
-                className="module-error"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={detectar}
+                disabled={detectando || ocupado}
               >
-                {detectError}
-              </motion.div>
-            )}
+                {detectando ? (
+                  <>
+                    <Loader2 size={14} strokeWidth={1.8} className="dap-spin" />
+                    Analizando instalaciones…
+                  </>
+                ) : (
+                  <>
+                    <ScanSearch size={14} strokeWidth={1.8} />
+                    Detectar sesión
+                  </>
+                )}
+              </button>
+
+              {diagnosticos.length > 0 && (
+                <div className="col" style={{ gap: 'var(--sp-2)', marginTop: 'var(--sp-1)' }}>
+                  <span className="section__title">Fuentes analizadas</span>
+                  {diagnosticos.map((fuente) => (
+                    <div
+                      key={`${fuente.kind}-${fuente.source}`}
+                      className="row"
+                      style={{ alignItems: 'flex-start', gap: 'var(--sp-2)' }}
+                    >
+                      <span
+                        className={`dot ${estadoFuente(fuente)}`}
+                        style={{ marginTop: 'var(--sp-1)' }}
+                        aria-hidden="true"
+                      />
+                      <div className="col" style={{ minWidth: 0 }}>
+                        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
+                          {fuente.source}
+                        </span>
+                        <span className="muted" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.45 }}>
+                          {fuente.detail}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {detectados.length > 0 && (
+                <div className="col" style={{ gap: 'var(--sp-2)', marginTop: 'var(--sp-1)' }}>
+                  <span className="section__title">Sesiones disponibles</span>
+                  <div className="list">
+                    {detectados.map((sesion) => {
+                      const avatar = avatarUrl(sesion)
+                      return (
+                        <button
+                          key={sesion.token}
+                          type="button"
+                          className="list__row"
+                          onClick={() => void conectar(sesion.token)}
+                          disabled={ocupado}
+                          style={{ width: '100%', textAlign: 'left' }}
+                        >
+                          <span
+                            style={{
+                              width: 'var(--sp-6)',
+                              height: 'var(--sp-6)',
+                              flexShrink: 0,
+                              borderRadius: 'var(--r-full)',
+                              overflow: 'hidden',
+                              background: 'var(--surface-3)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 'var(--text-xs)',
+                              color: 'var(--fg-2)'
+                            }}
+                          >
+                            {avatar ? (
+                              <img
+                                src={avatar}
+                                alt=""
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              />
+                            ) : (
+                              inicial(sesion)
+                            )}
+                          </span>
+                          <span className="col" style={{ minWidth: 0, flex: 1 }}>
+                            <span className="list__name">
+                              {sesion.user?.global_name || sesion.user?.username || 'Cuenta desconocida'}
+                            </span>
+                            <span className="list__meta">{sesion.source}</span>
+                          </span>
+                          <ArrowRight size={14} strokeWidth={1.8} className="dim" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {errorDeteccion && (
+                <div className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-2)' }}>
+                  <span className="badge badge--err">Sin acceso</span>
+                  <span style={{ fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--fg-2)' }}>
+                    {errorDeteccion}
+                  </span>
+                </div>
+              )}
+            </div>
           </section>
 
-          {/* Manual Entry Module */}
-          <section className="setup-module manual-module">
-            <div className="module-header">
-              <Shield size={18} className="icon-accent" />
-              <h3>Acceso Manual</h3>
-            </div>
+          {/* --- Token manual --- */}
+          <section className="card col" style={{ minWidth: 0 }}>
+            <header className="card__header">
+              <KeyRound size={15} strokeWidth={1.8} style={{ color: 'var(--fg-3)' }} />
+              <span className="card__title">Token manual</span>
+            </header>
 
-            <form onSubmit={handleSubmit} className="manual-form">
-              <div className="premium-input-wrapper">
-                <input
-                  className="premium-input"
-                  type={showToken ? 'text' : 'password'}
-                  value={token}
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  placeholder="Introduce tu Token de Discord"
-                  spellCheck={false}
-                />
-                <button
-                  type="button"
-                  className="input-action-btn"
-                  onClick={() => setShowToken(!showToken)}
-                >
-                  {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-
-              <motion.button
-                className="btn-submit"
-                type="submit"
-                disabled={!token.trim() || status === 'connecting'}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                {status === 'connecting' ? (
-                  <span className="flex-center gap-2">
-                    <Loader2 className="animate-spin" size={16} /> Verificando...
+            <div className="card__body">
+              <form className="col" style={{ gap: 'var(--sp-3)' }} onSubmit={enviarManual}>
+                <div className="field">
+                  <label className="field__label" htmlFor="token-manual">
+                    Token de acceso
+                  </label>
+                  <div className="row" style={{ gap: 'var(--sp-2)' }}>
+                    <input
+                      id="token-manual"
+                      className="input"
+                      type={visible ? 'text' : 'password'}
+                      value={valor}
+                      onChange={(evento) => setValor(evento.target.value)}
+                      placeholder="Pega aquí tu token"
+                      spellCheck={false}
+                      autoComplete="off"
+                      style={{ flex: 1, minWidth: 0 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--icon"
+                      onClick={() => setVisible((previo) => !previo)}
+                      title={visible ? 'Ocultar token' : 'Mostrar token'}
+                      aria-label={visible ? 'Ocultar token' : 'Mostrar token'}
+                    >
+                      {visible ? <EyeOff size={15} strokeWidth={1.8} /> : <Eye size={15} strokeWidth={1.8} />}
+                    </button>
+                  </div>
+                  <span className="field__hint">
+                    Se guarda cifrado en este equipo. No se envía a ningún servicio externo.
                   </span>
-                ) : 'Vincular con Token'}
-              </motion.button>
+                </div>
 
-              {error && (
-                <div className="form-error">
-                  <span className="error-icon">!</span>
-                  {error}
-                </div>
-              )}
-            </form>
+                <button
+                  type="submit"
+                  className="btn btn--primary btn--block"
+                  disabled={!valor.trim() || ocupado}
+                >
+                  {ocupado ? (
+                    <>
+                      <Loader2 size={14} strokeWidth={1.8} className="dap-spin" />
+                      Verificando…
+                    </>
+                  ) : (
+                    <>
+                      <LogIn size={14} strokeWidth={1.8} />
+                      Conectar
+                    </>
+                  )}
+                </button>
 
-            <details className="setup-guide">
-              <summary>
-                <Sparkles size={14} className="mr-2" />
-                <span>¿Cómo obtener mi token?</span>
-              </summary>
-              <div className="guide-content">
-                <div className="step">
-                  <span className="step-num">01</span>
-                  <p>Abre Discord Desktop o Web y pulsa <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>I</kbd></p>
-                </div>
-                <div className="step">
-                  <span className="step-num">02</span>
-                  <p>Ve a la pestaña <strong>Red (Network)</strong> y busca peticiones a <code>/api</code></p>
-                </div>
-                <div className="step">
-                  <span className="step-num">03</span>
-                  <p>En los <strong>Headers</strong>, localiza el campo <code>Authorization</code></p>
-                </div>
-              </div>
-            </details>
+                {error && (
+                  <div className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-2)' }}>
+                    <span className="badge badge--err">Error</span>
+                    <span style={{ fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--fg-2)' }}>
+                      {error}
+                    </span>
+                  </div>
+                )}
+              </form>
+            </div>
           </section>
         </div>
 
-        {/* Footer Meta */}
-        <footer className="setup-footer">
-          <div className="footer-status">
-            <CheckCircle2 size={12} />
-            <span>Encriptación local AES-256 asegurada</span>
+        {/* ---------- Instrucciones ---------- */}
+        <section className="card">
+          <header className="card__header">
+            <ShieldCheck size={15} strokeWidth={1.8} style={{ color: 'var(--fg-3)' }} />
+            <span className="card__title">Cómo obtener el token</span>
+          </header>
+          <div className="card__body">
+            <ol className="col" style={{ gap: 'var(--sp-3)' }}>
+              <li className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-3)' }}>
+                <span
+                  className="mono dim"
+                  style={{ fontSize: 'var(--text-xs)', paddingTop: 'var(--sp-1)' }}
+                >
+                  01
+                </span>
+                <span style={{ fontSize: 'var(--text-md)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+                  Abre Discord en el navegador e inicia sesión con la cuenta que quieres archivar.
+                </span>
+              </li>
+              <li className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-3)' }}>
+                <span
+                  className="mono dim"
+                  style={{ fontSize: 'var(--text-xs)', paddingTop: 'var(--sp-1)' }}
+                >
+                  02
+                </span>
+                <span style={{ fontSize: 'var(--text-md)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+                  Abre las herramientas de desarrollo con <span className="kbd">F12</span> o{' '}
+                  <span className="kbd">Ctrl</span> <span className="kbd">Shift</span>{' '}
+                  <span className="kbd">I</span>.
+                </span>
+              </li>
+              <li className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-3)' }}>
+                <span
+                  className="mono dim"
+                  style={{ fontSize: 'var(--text-xs)', paddingTop: 'var(--sp-1)' }}
+                >
+                  03
+                </span>
+                <span style={{ fontSize: 'var(--text-md)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+                  Entra en <span className="mono">Application</span> ›{' '}
+                  <span className="mono">Local Storage</span> ›{' '}
+                  <span className="mono">https://discord.com</span>.
+                </span>
+              </li>
+              <li className="row" style={{ alignItems: 'flex-start', gap: 'var(--sp-3)' }}>
+                <span
+                  className="mono dim"
+                  style={{ fontSize: 'var(--text-xs)', paddingTop: 'var(--sp-1)' }}
+                >
+                  04
+                </span>
+                <span style={{ fontSize: 'var(--text-md)', lineHeight: 1.6, color: 'var(--fg-2)' }}>
+                  Copia el valor de la clave <span className="mono">token</span> y pégalo en el campo
+                  de token manual.
+                </span>
+              </li>
+            </ol>
           </div>
-        </footer>
-      </motion.div>
+        </section>
+
+        <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
+          Usa únicamente cuentas propias. El token se guarda cifrado en este equipo y el contenido
+          archivado permanece en la carpeta <span className="mono">data/</span> junto al ejecutable.
+        </p>
+      </div>
     </div>
   )
 }
-

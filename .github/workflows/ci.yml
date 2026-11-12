@@ -1,0 +1,65 @@
+# Verificación en cada push y pull request.
+# No empaqueta: solo comprueba que el proyecto compila y que los tests pasan,
+# para que un fallo se vea en minutos y no al publicar.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: Tipos, tests y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Sin scripts de instalación: la verificación no necesita compilar
+      # módulos nativos (better-sqlite3) ni descargar Electron.
+      - name: Dependencias
+        run: npm ci --ignore-scripts
+
+      - name: Tipos
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Comprobar que el icono está generado
+        run: |
+          test -f resources/icon.ico
+          test -f resources/icon.png
+          node -e "
+            const fs = require('fs');
+            const png = fs.readFileSync('resources/icon.png');
+            if (png.slice(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+              console.error('resources/icon.png no es un PNG válido');
+              process.exit(1);
+            }
+            const ico = fs.readFileSync('resources/icon.ico');
+            const n = ico.readUInt16LE(4);
+            if (n < 5) {
+              console.error('resources/icon.ico tiene muy pocos tamaños: ' + n);
+              process.exit(1);
+            }
+            console.log('icon.png 512 y icon.ico con ' + n + ' tamaños');
+          "

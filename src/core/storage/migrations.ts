@@ -1,19 +1,18 @@
 // ============================================================
-// SQLite Database Migrations — Schema for cache, downloads,
-// and file tracking. Runs on app startup.
+// Migraciones SQLite — esquema de caché, cola e historial.
+// Cada migración es idempotente y se aplica dentro de una
+// transacción; `_meta.schema_version` es la fuente de verdad.
 // ============================================================
 
 export const MIGRATIONS: { version: number; sql: string }[] = [
   {
     version: 1,
     sql: `
-      -- Meta table for schema versioning
       CREATE TABLE IF NOT EXISTS _meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
 
-      -- Cached forum posts/threads
       CREATE TABLE IF NOT EXISTS cached_posts (
         thread_id       TEXT PRIMARY KEY,
         guild_id        TEXT NOT NULL,
@@ -34,7 +33,6 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
         total_size      INTEGER DEFAULT 0
       );
 
-      -- Individual messages within threads
       CREATE TABLE IF NOT EXISTS cached_messages (
         message_id      TEXT PRIMARY KEY,
         thread_id       TEXT NOT NULL,
@@ -47,7 +45,6 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
         sync_status     TEXT DEFAULT 'synced'
       );
 
-      -- Downloaded files tracking
       CREATE TABLE IF NOT EXISTS cached_files (
         file_id         TEXT PRIMARY KEY,
         message_id      TEXT,
@@ -61,7 +58,6 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
         still_valid     INTEGER DEFAULT 1
       );
 
-      -- Persistent download queue
       CREATE TABLE IF NOT EXISTS download_queue (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         thread_id       TEXT NOT NULL,
@@ -80,7 +76,6 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
         export_options  TEXT
       );
 
-      -- User cache for mention resolution
       CREATE TABLE IF NOT EXISTS cached_users (
         user_id         TEXT PRIMARY KEY,
         username        TEXT NOT NULL,
@@ -90,7 +85,6 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
         cached_at       TEXT NOT NULL
       );
 
-      -- Indexes
       CREATE INDEX IF NOT EXISTS idx_posts_guild ON cached_posts(guild_id);
       CREATE INDEX IF NOT EXISTS idx_posts_channel ON cached_posts(channel_id);
       CREATE INDEX IF NOT EXISTS idx_posts_status ON cached_posts(sync_status);
@@ -105,46 +99,17 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
   {
     version: 2,
     sql: `
-      -- FTS5 Virtual Table for offline full-text search
-      CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
-        thread_id,
-        message_id,
-        author,
-        content,
-        content='cached_messages',
-        content_rowid='rowid'
-      );
-
-      -- Triggers to keep FTS index updated automatically
-      CREATE TRIGGER IF NOT EXISTS search_index_ai AFTER INSERT ON cached_messages BEGIN
-        INSERT INTO search_index(rowid, thread_id, message_id, author, content) 
-        VALUES (new.rowid, new.thread_id, new.message_id, new.author_id, new.content_hash);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS search_index_ad AFTER DELETE ON cached_messages BEGIN
-        INSERT INTO search_index(search_index, rowid, thread_id, message_id, author, content) 
-        VALUES('delete', old.rowid, old.thread_id, old.message_id, old.author_id, old.content_hash);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS search_index_au AFTER UPDATE ON cached_messages BEGIN
-        INSERT INTO search_index(search_index, rowid, thread_id, message_id, author, content) 
-        VALUES('delete', old.rowid, old.thread_id, old.message_id, old.author_id, old.content_hash);
-        INSERT INTO search_index(rowid, thread_id, message_id, author, content) 
-        VALUES (new.rowid, new.thread_id, new.message_id, new.author_id, new.content_hash);
-      END;
+      -- Índices que faltaban para ordenar y filtrar sin table-scan.
+      CREATE INDEX IF NOT EXISTS idx_posts_created ON cached_posts(created_at);
+      CREATE INDEX IF NOT EXISTS idx_messages_created ON cached_messages(created_at);
+      CREATE INDEX IF NOT EXISTS idx_posts_synced ON cached_posts(last_synced);
 
       INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '2');
     `
-  }
-  ,
+  },
   {
     version: 3,
     sql: `
-      -- Download history for auditing and analytics
-      -- NOTE: migration v3 adds a compact history table to record summaries
-      -- of each queue export. This keeps the heavy queue separate from
-      -- audit logs and enables renderer history views without touching the
-      -- export files on disk.
       CREATE TABLE IF NOT EXISTS download_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         queue_id INTEGER,
@@ -165,8 +130,26 @@ export const MIGRATIONS: { version: number; sql: string }[] = [
 
       CREATE INDEX IF NOT EXISTS idx_download_history_thread ON download_history(thread_id);
       CREATE INDEX IF NOT EXISTS idx_download_history_status ON download_history(status);
+      CREATE INDEX IF NOT EXISTS idx_download_history_completed ON download_history(completed_at DESC);
 
       INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '3');
     `
+  },
+  {
+    version: 4,
+    sql: `
+      -- La migración v2 original creaba una tabla FTS5 con content='cached_messages'
+      -- declarando columnas (author, content) que NO existen en la tabla origen, y
+      -- indexaba content_hash en lugar del texto. Cualquier MATCH fallaba. No hay
+      -- ninguna función de búsqueda en la app: se elimina por completo.
+      DROP TRIGGER IF EXISTS search_index_ai;
+      DROP TRIGGER IF EXISTS search_index_ad;
+      DROP TRIGGER IF EXISTS search_index_au;
+      DROP TABLE IF EXISTS search_index;
+
+      INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '4');
+    `
   }
 ]
+
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version

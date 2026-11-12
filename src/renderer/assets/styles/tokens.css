@@ -1,0 +1,185 @@
+/* ============================================================
+   Tokens de diseño — Estrato
+   Identidad: «archivo». Tinta cálida, un solo acento cobre,
+   tipografía editorial para títulos y cifras tabulares.
+   ============================================================ */
+
+:root {
+  /* ---- Superficies (tinta cálida, no azul marino) ---- */
+  --ink-950: #0b0d10;
+  --ink-900: #0e1116;
+  --ink-850: #12151b;
+  --ink-800: #161a21;
+  --ink-750: #1b2028;
+  --ink-700: #222831;
+  --ink-650: #2a313b;
+
+  --surface-0: var(--ink-900);
+  --surface-1: var(--ink-850);
+  --surface-2: var(--ink-800);
+  --surface-3: var(--ink-750);
+  --surface-hover: var(--ink-700);
+
+  /* ---- Líneas ---- */
+  --line-soft: rgba(255, 255, 255, 0.055);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  /* ---- Texto ---- */
+  --fg: #e8e9ec;
+  --fg-2: #a5abb6;
+  --fg-3: #6d7581;
+  --fg-4: #4c535e;
+
+  /* ---- Acento único: cobre ---- */
+  --accent: #c9873f;
+  --accent-hover: #dda05a;
+  --accent-press: #b4762f;
+  --accent-soft: rgba(201, 135, 63, 0.12);
+  --accent-line: rgba(201, 135, 63, 0.32);
+  --accent-fg: #f0c48a;
+
+  /* ---- Semánticos ---- */
+  --ok: #56a377;
+  --ok-soft: rgba(86, 163, 119, 0.13);
+  --warn: #c9a227;
+  --warn-soft: rgba(201, 162, 39, 0.13);
+  --err: #c25c58;
+  --err-soft: rgba(194, 92, 88, 0.13);
+  --info: #5f8cba;
+  --info-soft: rgba(95, 140, 186, 0.13);
+
+  /* ---- Tipografía ---- */
+  /* Los nombres de canal de Discord llevan emoji: sin una fuente de emoji en la
+     pila, Windows los dibuja como cajas y el nombre se vuelve ilegible. */
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Inter',
+    'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, ui-serif, serif;
+  --font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, ui-monospace, 'Segoe UI Emoji',
+    monospace;
+
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+  --text-3xl: 34px;
+
+  /* ---- Espaciado ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* ---- Formas ---- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --r-full: 999px;
+
+  /* ---- Elevación ---- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --ring: 0 0 0 2px var(--ink-900), 0 0 0 3px var(--accent-line);
+
+  /* ---- Movimiento ---- */
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --dur-fast: 110ms;
+  --dur: 150ms;
+  --dur-slow: 220ms;
+
+  /* ---- Medidas del armazón ---- */
+  --titlebar-h: 40px;
+  --rail-w: 76px;
+  --header-h: 60px;
+
+  /* ---- Compatibilidad con estilos existentes ---- */
+  --bg-0: var(--surface-0);
+  --bg-1: var(--surface-1);
+  --bg-2: var(--surface-2);
+  --bg-3: var(--surface-3);
+  --bg-hover: var(--surface-hover);
+  --text-0: var(--fg);
+  --text-1: var(--fg);
+  --text-2: var(--fg-2);
+  --text-3: var(--fg-3);
+  --text-muted: var(--fg-3);
+  --accent-dim: var(--accent-soft);
+  --accent-text: var(--accent-fg);
+  --green: var(--ok);
+  --amber: var(--warn);
+  --red: var(--err);
+  --blue: var(--info);
+  --border: var(--line);
+  --border-focus: var(--accent-line);
+  --radius-xs: var(--r-sm);
+  --radius-sm: var(--r-md);
+  --radius-md: var(--r-lg);
+  --radius-lg: var(--r-xl);
+  --radius-full: var(--r-full);
+  --font: var(--font-ui);
+  --font-xs: var(--text-xs);
+  --font-sm: var(--text-sm);
+  --font-base: var(--text-md);
+  --font-md: var(--text-lg);
+  --font-lg: var(--text-xl);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
+
+  /* ---- Estados de descarga ---- */
+  --status-queued: var(--fg-3);
+  --status-downloading: var(--accent);
+  --status-done: var(--ok);
+  --status-error: var(--err);
+  --status-cancelled: var(--fg-4);
+  --status-paused: var(--warn);
+}
+
+/* Tema claro: mismo sistema, papel cálido. */
+:root[data-theme='light'] {
+  --ink-950: #f6f4ef;
+  --ink-900: #f1eee7;
+  --ink-850: #eae6dd;
+  --ink-800: #e3ded4;
+  --ink-750: #dad4c8;
+  --ink-700: #cec7b8;
+  --ink-650: #bfb7a6;
+
+  --surface-0: #f6f4ef;
+  --surface-1: #efece4;
+  --surface-2: #e8e3d9;
+  --surface-3: #ded8cb;
+  --surface-hover: #d5cec0;
+
+  --line-soft: rgba(30, 24, 16, 0.06);
+  --line: rgba(30, 24, 16, 0.12);
+  --line-strong: rgba(30, 24, 16, 0.22);
+
+  --fg: #1f1c16;
+  --fg-2: #4d473c;
+  --fg-3: #776f61;
+  --fg-4: #9a9284;
+
+  --accent: #a8661f;
+  --accent-hover: #8f5516;
+  --accent-press: #7a4812;
+  --accent-soft: rgba(168, 102, 31, 0.1);
+  --accent-line: rgba(168, 102, 31, 0.35);
+  --accent-fg: #7a4812;
+
+  --ok: #3f7d58;
+  --warn: #96751a;
+  --err: #a13f3b;
+  --info: #3f6d97;
+
+  --shadow-sm: 0 1px 2px rgba(60, 50, 35, 0.12);
+  --shadow-md: 0 8px 24px rgba(60, 50, 35, 0.16);
+}

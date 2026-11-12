@@ -1,36 +1,34 @@
 // ============================================================
-// Download Manager — Queue-based orchestrator for downloading
-// forum posts. Concurrent downloads, persistent queue, events.
+// Gestor de descargas — orquestador de cola con concurrencia,
+// cancelación real, deduplicación y export multi-formato.
 // ============================================================
 
 import { EventEmitter } from 'events'
+import fs from 'fs'
+import path from 'path'
 import { DiscordClient } from '../discord/api-client'
+import { ENDPOINTS } from '../discord/endpoints'
 import { FileDownloader } from './file-downloader'
-import { ProgressTracker, type PostProgress } from './progress-tracker'
+import { ProgressTracker, type PostProgress, type TaskTracker } from './progress-tracker'
 import { Deduplicator } from './deduplicator'
-import { CacheManager, type SyncCheckResult } from '../storage/cache-manager'
+import { CacheManager } from '../storage/cache-manager'
 import { MarkdownGenerator } from '../export/markdown-generator'
 import { HtmlGenerator } from '../export/html-generator'
 import { JsonExporter } from '../export/json-exporter'
 import { FolderBuilder } from '../export/folder-builder'
 import { IndexGenerator } from '../export/index-generator'
+import { PdfGenerator } from '../export/pdf-generator'
+import { buildEpub } from '../export/epub-generator'
 import { DiscordMarkdownParser } from '../discord/markdown-parser'
 import * as db from '../storage/database'
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
-import fontkit from '@pdf-lib/fontkit'
-import Epub from 'epub-gen-memory'
-import sharp from 'sharp'
-import fs from 'fs'
-import path from 'path'
-import { app } from 'electron'
 import type {
-  DiscordThread,
-  DiscordMessage,
-  DownloadTask,
-  DownloadStatus,
-  ExportOptions,
   ContentSelection,
-  ForumTag
+  DiscordMessage,
+  DiscordThread,
+  DownloadTask,
+  ExportOptions,
+  ForumTag,
+  PersistedQueueItem
 } from '../discord/types'
 
 export interface DownloadManagerEvents {
@@ -43,19 +41,68 @@ export interface DownloadManagerEvents {
   'all-completed': () => void
 }
 
+interface PlannedAsset {
+  url: string
+  aliases: string[]
+  filename: string
+  subDir: 'images' | 'videos' | 'files'
+  fileId: string
+  messageId: string
+  size: number
+}
+
+interface IndexTarget {
+  channelName: string
+  channelId: string
+}
+
+const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.avif']
+const VIDEO_EXT = ['.mp4', '.webm', '.mov', '.avi', '.mkv']
+
+function emptyProgress(): PostProgress {
+  return {
+    phase: 'fetching',
+    messagesTotal: 0,
+    messagesFetched: 0,
+    assetsTotal: 0,
+    assetsDownloaded: 0,
+    bytesTotal: 0,
+    bytesDownloaded: 0,
+    speed: 0,
+    eta: 0
+  }
+}
+
+function kindOf(contentType: string | undefined, filename: string): 'images' | 'videos' | 'files' {
+  const ext = path.extname(filename).toLowerCase()
+  if ((contentType || '').startsWith('image/') || IMAGE_EXT.includes(ext)) return 'images'
+  if ((contentType || '').startsWith('video/') || VIDEO_EXT.includes(ext)) return 'videos'
+  return 'files'
+}
+
 export class DownloadManager extends EventEmitter {
   private client: DiscordClient
-  private fileDownloader: FileDownloader
-  private deduplicator: Deduplicator
-  private progressTracker: ProgressTracker
+  private fileDownloader = new FileDownloader()
+  private deduplicator = new Deduplicator()
+  private progressTracker = new ProgressTracker()
   private mdParser: DiscordMarkdownParser
 
   private activeTasks = new Map<string, DownloadTask>()
+  private controllers = new Map<string, AbortController>()
+  private lastProgressEmit = new Map<string, number>()
+
   private concurrency: number
   private running = 0
   private paused = false
+  private destroyed = false
+
   private exportOptions: ExportOptions
   private contentSelection: ContentSelection
+
+  private indexTimer: NodeJS.Timeout | null = null
+  private pendingIndexes = new Map<string, IndexTarget>()
+  /** Tags reales (con nombre) por taskId; el hilo solo trae IDs. */
+  private taskTags = new Map<string, ForumTag[]>()
 
   constructor(
     client: DiscordClient,
@@ -67,15 +114,11 @@ export class DownloadManager extends EventEmitter {
   ) {
     super()
     this.client = client
-    this.concurrency = options.concurrency || 2
+    this.concurrency = Math.min(10, Math.max(1, options.concurrency || 2))
     this.exportOptions = options.exportOptions
     this.contentSelection = options.contentSelection
-    this.fileDownloader = new FileDownloader()
-    this.deduplicator = new Deduplicator()
-    this.progressTracker = new ProgressTracker()
     this.mdParser = new DiscordMarkdownParser({
       resolveUser: async (userId: string) => {
-        // Try DB cache first
         const cached = db.getCachedUser(userId)
         if (cached) return cached
         try {
@@ -89,9 +132,15 @@ export class DownloadManager extends EventEmitter {
     })
   }
 
+  // ----------- Configuración -----------
+
+  setClient(client: DiscordClient): void {
+    this.client = client
+  }
+
   setConcurrency(n: number): void {
-    this.concurrency = n
-    if (!this.paused) this.processQueue()
+    this.concurrency = Math.min(10, Math.max(1, n))
+    if (!this.paused) void this.processQueue()
   }
 
   updateOptions(exportOptions: ExportOptions, contentSelection: ContentSelection): void {
@@ -99,7 +148,31 @@ export class DownloadManager extends EventEmitter {
     this.contentSelection = contentSelection
   }
 
-  // ----------- Queue Management -----------
+  // ----------- Cola -----------
+
+  /** Reconstruye la cola persistida al arrancar (queda en pausa). */
+  restoreQueue(items: PersistedQueueItem[]): void {
+    for (const item of items) {
+      const id = String(item.id)
+      if (this.activeTasks.has(id)) continue
+      this.activeTasks.set(id, {
+        id,
+        threadId: item.thread_id,
+        guildId: item.guild_id,
+        channelId: item.channel_id,
+        guildName: item.guild_name || '',
+        channelName: item.channel_name || '',
+        threadName: item.thread_name || '',
+        priority: item.priority || 0,
+        status: 'paused',
+        progress: emptyProgress(),
+        createdAt: item.created_at,
+        retryCount: item.retry_count || 0
+      })
+      db.updateQueueStatus(item.id, 'paused')
+    }
+    this.emit('queue-updated', this.getQueue())
+  }
 
   async addToQueue(
     threads: { thread: DiscordThread; tags: ForumTag[] }[],
@@ -108,7 +181,7 @@ export class DownloadManager extends EventEmitter {
   ): Promise<string[]> {
     const taskIds: string[] = []
 
-    for (const { thread } of threads) {
+    for (const { thread, tags } of threads) {
       const queueId = db.addToQueue({
         thread_id: thread.id,
         guild_id: thread.guild_id,
@@ -120,8 +193,15 @@ export class DownloadManager extends EventEmitter {
         export_options: JSON.stringify(this.exportOptions)
       })
 
-      const task: DownloadTask = {
-        id: queueId.toString(),
+      const id = String(queueId)
+      if (tags?.length) this.taskTags.set(id, tags)
+      if (this.activeTasks.has(id)) {
+        taskIds.push(id)
+        continue
+      }
+
+      this.activeTasks.set(id, {
+        id,
         threadId: thread.id,
         guildId: thread.guild_id,
         channelId: thread.parent_id,
@@ -130,478 +210,525 @@ export class DownloadManager extends EventEmitter {
         threadName: thread.name,
         priority: 0,
         status: 'queued',
-        progress: {
-          phase: 'fetching',
-          messagesTotal: 0,
-          messagesFetched: 0,
-          assetsTotal: 0,
-          assetsDownloaded: 0,
-          bytesTotal: 0,
-          bytesDownloaded: 0,
-          speed: 0,
-          eta: 0
-        },
+        progress: emptyProgress(),
         createdAt: new Date().toISOString(),
         retryCount: 0
-      }
-
-      this.activeTasks.set(task.id, task)
-      taskIds.push(task.id)
+      })
+      taskIds.push(id)
     }
 
     this.emit('queue-updated', this.getQueue())
-    this.processQueue()
+    void this.processQueue()
     return taskIds
   }
 
   private async processQueue(): Promise<void> {
-    if (this.paused) return
+    if (this.paused || this.destroyed) return
 
     while (this.running < this.concurrency) {
-      const nextTask = this.getNextTask()
-      if (!nextTask) break
+      const task = this.getNextQueued()
+      if (!task) break
 
       this.running++
-      nextTask.status = 'downloading'
-      nextTask.startedAt = new Date().toISOString()
-      db.updateQueueStatus(parseInt(nextTask.id), 'downloading')
-      this.emit('task-started', nextTask)
+      task.status = 'downloading'
+      task.startedAt = new Date().toISOString()
+      db.updateQueueStatus(parseInt(task.id, 10), 'downloading')
+      this.emit('task-started', task)
+      this.emit('queue-updated', this.getQueue())
 
-      this.processTask(nextTask)
+      const controller = new AbortController()
+      this.controllers.set(task.id, controller)
+
+      this.processTask(task, controller.signal)
         .then(() => {
-          nextTask.status = 'done'
-          nextTask.completedAt = new Date().toISOString()
-          db.updateQueueStatus(parseInt(nextTask.id), 'done')
-          this.emit('task-completed', nextTask)
+          // Cancelar NUNCA debe terminar como "done".
+          if (task.status === 'cancelled') return
+          task.status = 'done'
+          task.completedAt = new Date().toISOString()
+          db.updateQueueStatus(parseInt(task.id, 10), 'done')
+          this.emit('task-completed', task)
         })
         .catch((error: Error) => {
-          nextTask.status = 'error'
-          nextTask.errorMessage = error.message
-          db.updateQueueStatus(parseInt(nextTask.id), 'error', error.message)
-          this.emit('task-error', nextTask.id, error.message)
-
-          // Persist an error entry in download history for diagnostics.
-          try {
-            db.recordDownloadHistory({
-              queue_id: parseInt(nextTask.id) || undefined,
-              thread_id: nextTask.threadId,
-              guild_id: nextTask.guildId,
-              channel_id: nextTask.channelId,
-              guild_name: nextTask.guildName,
-              channel_name: nextTask.channelName,
-              thread_name: nextTask.threadName,
-              status: 'error',
-              error_message: error.message,
-              started_at: nextTask.startedAt || null,
-              completed_at: new Date().toISOString()
-            })
-          } catch (e) {
-            console.warn('Failed to record history for errored task:', (e as Error).message)
+          if (task.status === 'cancelled' || error.message === 'cancelled') {
+            task.status = 'cancelled'
+            db.updateQueueStatus(parseInt(task.id, 10), 'cancelled')
+            this.emit('task-cancelled', task.id)
+            return
           }
+          task.status = 'error'
+          task.errorMessage = error.message
+          db.updateQueueStatus(parseInt(task.id, 10), 'error', error.message)
+          this.emit('task-error', task.id, error.message)
+          db.recordDownloadHistory({
+            queue_id: parseInt(task.id, 10) || undefined,
+            thread_id: task.threadId,
+            guild_id: task.guildId,
+            channel_id: task.channelId,
+            guild_name: task.guildName,
+            channel_name: task.channelName,
+            thread_name: task.threadName,
+            status: 'error',
+            error_message: error.message,
+            started_at: task.startedAt || null,
+            completed_at: new Date().toISOString()
+          })
         })
         .finally(() => {
           this.running--
+          this.controllers.delete(task.id)
           this.emit('queue-updated', this.getQueue())
-          if (this.running === 0 && !this.getNextTask()) {
+          if (this.running === 0 && !this.getNextQueued()) {
+            this.flushIndexes()
             this.emit('all-completed')
           } else {
-            this.processQueue()
+            void this.processQueue()
           }
         })
     }
   }
 
-  private getNextTask(): DownloadTask | null {
+  private getNextQueued(): DownloadTask | null {
     for (const task of this.activeTasks.values()) {
       if (task.status === 'queued') return task
     }
     return null
   }
 
-  private async processTask(task: DownloadTask): Promise<void> {
+  // ----------- Procesamiento -----------
+
+  private async processTask(task: DownloadTask, signal: AbortSignal): Promise<void> {
     const progress = this.progressTracker.createTracker(task.id)
-    // Record a local start time for history auditing. We avoid overwriting
-    // the outer `startedAt` if already populated by the manager.
     const startedAt = task.startedAt || new Date().toISOString()
     task.startedAt = startedAt
 
-    // Phase 1: Fetch all messages (with Delta Sync)
+    const throwIfCancelled = (): void => {
+      if (signal.aborted || task.status === 'cancelled') throw new Error('cancelled')
+    }
+
     progress.update({ phase: 'fetching' })
     this.emitProgress(task.id, progress.get())
 
-    const cachedPost = db.getCachedPost(task.threadId)
-    const afterId = cachedPost?.last_message_id || undefined
+    const channel = await this.client.getChannel(task.threadId)
+    throwIfCancelled()
 
-    const newMessages = await this.client.getAllThreadMessages(task.threadId, (count) => {
+    // --- Delta real: si no cambió nada y el export existe, no se toca nada ---
+    const cached = db.getCachedPost(task.threadId)
+    if (this.exportOptions.syncMode === 'quick' && cached?.download_path && fs.existsSync(cached.download_path)) {
+      const lastMessageId = channel.last_message_id || null
+      const messageCount = channel.message_count ?? cached.message_count
+      if (
+        (cached.last_message_id || '') === (lastMessageId || '') &&
+        cached.message_count === messageCount &&
+        cached.sync_status === 'synced'
+      ) {
+        progress.update({ phase: 'done', messagesTotal: messageCount, messagesFetched: messageCount })
+        this.emitProgress(task.id, progress.get())
+        return
+      }
+    }
+
+    // --- Mensajes ---
+    const messages = await this.client.getAllThreadMessages(task.threadId, (count) => {
       progress.update({ messagesFetched: count })
       this.emitProgress(task.id, progress.get())
     })
+    throwIfCancelled()
 
-    let messages = newMessages
-    if (messages.length === 0) {
-      throw new Error('No messages found in thread')
-    }
+    if (messages.length === 0) throw new Error('El hilo no contiene mensajes')
 
-    progress.update({
-      messagesTotal: messages.length,
-      messagesFetched: messages.length
-    })
+    progress.update({ messagesTotal: messages.length, messagesFetched: messages.length })
 
-    // Build folder structure
+    const thread = this.buildThread(task, channel, messages)
+
+    // --- Directorio (reutiliza el existente para no duplicar 002_, 003_...) ---
     const folderBuilder = new FolderBuilder(this.exportOptions)
-    const postDir = folderBuilder.createPostDirectory(
-      task.guildName,
-      task.channelName,
-      task.threadName,
-      messages[0]?.timestamp
-    )
+    const postDir =
+      cached?.download_path && fs.existsSync(cached.download_path)
+        ? cached.download_path
+        : folderBuilder.createPostDirectory(
+            task.guildName,
+            task.channelName,
+            thread.name,
+            messages[0]?.timestamp
+          )
 
-    // Phase 2: Download assets
+    // --- Recursos ---
     progress.update({ phase: 'downloading_assets' })
     this.emitProgress(task.id, progress.get())
 
-    let totalSize = 0
-    const assetMap = new Map<string, string>() // original URL -> local relative path
+    const { assetMap, totalSize } = await this.downloadAssets(
+      messages,
+      postDir,
+      task.id,
+      progress,
+      signal
+    )
+    throwIfCancelled()
 
-    // Count total assets (all attachments)
-    let totalAssets = 0
-    for (const msg of messages) {
-      totalAssets += msg.attachments.length
-    }
-    progress.update({ assetsTotal: totalAssets })
-
-    // Download attachments
-    let assetsDownloaded = 0
-    for (const msg of messages) {
-      for (const attachment of msg.attachments) {
-        if (task.status === 'cancelled') return
-
-        const ext = path.extname(attachment.filename).toLowerCase()
-        const isImage = attachment.content_type?.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)
-        const isVideo = attachment.content_type?.startsWith('video/') || ['.mp4', '.webm', '.mov', '.avi', '.mkv'].includes(ext)
-        const isFile = !isImage && !isVideo
-
-        // Logic revised to comply with 'download all' mandate:
-        // We still categorize for subfolder organization, but we ensure broad extension support.
-        if (isImage && !this.contentSelection.images) continue
-        if (isVideo && !this.contentSelection.videos) continue
-        if (isFile && !this.contentSelection.files) continue
-
-        try {
-          // Check dedup
-          const dedupResult = this.deduplicator.check(attachment.id, attachment.size)
-          if (dedupResult) {
-            assetMap.set(attachment.url, dedupResult)
-            assetsDownloaded++
-            progress.update({ assetsDownloaded })
-            this.emitProgress(task.id, progress.get())
-            continue
-          }
-
-          const subDir = isImage ? 'images' : isVideo ? 'videos' : 'files'
-          const { localPath, size } = await this.fileDownloader.download(
-            attachment.url,
-            postDir,
-            subDir,
-            attachment.filename,
-            (bytes: number) => {
-              progress.update({
-                bytesDownloaded: progress.get().bytesDownloaded + bytes,
-                currentFile: attachment.filename
-              })
-              this.emitProgress(task.id, progress.get())
-            }
-          )
-
-          const relativePath = `./assets/${subDir}/${path.basename(localPath)}`
-          assetMap.set(attachment.url, relativePath)
-          assetMap.set(attachment.proxy_url, relativePath)
-
-          // Issue #4: Convert GIF to PNG for better compatibility while keeping original
-          if (ext === '.gif') {
-            try {
-              const pngFilename = `${path.basename(localPath, '.gif')}.png`
-              const pngLocalPath = path.join(path.dirname(localPath), pngFilename)
-              await sharp(localPath).png().toFile(pngLocalPath)
-              // Store PNG as additional asset reference
-              assetMap.set(`${attachment.url}_png`, `./assets/${subDir}/${pngFilename}`)
-            } catch (err) {
-              console.error('GIF to PNG conversion failed:', err)
-            }
-          }
-
-          totalSize += size
-
-          // Record in dedup and cache
-          this.deduplicator.record(attachment.id, attachment.size, relativePath)
-          db.upsertCachedFile({
-            file_id: attachment.id,
-            message_id: msg.id,
-            original_url: attachment.url,
-            local_path: localPath,
-            file_hash: CacheManager.computeFileHash(localPath),
-            file_size: size,
-            mime_type: attachment.content_type || 'application/octet-stream',
-            filename: attachment.filename,
-            downloaded_at: new Date().toISOString(),
-            still_valid: true
-          })
-        } catch (error) {
-          console.error(`Failed to download ${attachment.filename}:`, error)
-        }
-
-        assetsDownloaded++
-        progress.update({ assetsDownloaded })
-        this.emitProgress(task.id, progress.get())
-      }
-    }
-
-    // Phase 3: Export
+    // --- Exportación ---
     progress.update({ phase: 'exporting' })
     this.emitProgress(task.id, progress.get())
 
-    // Get thread info
-    let thread: DiscordThread
-    try {
-      thread = (await this.client.getChannel(task.threadId)) as unknown as DiscordThread
-    } catch {
-      thread = {
-        id: task.threadId,
-        guild_id: task.guildId,
-        parent_id: task.channelId,
-        owner_id: messages[0]?.author?.id || '',
-        name: task.threadName,
-        type: 11,
-        last_message_id: messages[messages.length - 1]?.id || null,
-        message_count: messages.length,
-        member_count: 0,
-        total_message_sent: messages.length,
-        applied_tags: [],
-        thread_metadata: { archived: false, auto_archive_duration: 4320, archive_timestamp: '', locked: false },
-        created_timestamp: messages[0]?.timestamp || ''
-      }
-    }
-
-    // Generate exports
-    const mdGenerator = new MarkdownGenerator(this.mdParser, assetMap)
-
-    if (this.exportOptions.formats.includes('markdown')) {
-      await mdGenerator.generatePostMarkdown(thread, messages, task.guildName, task.channelName, postDir)
-      if (this.contentSelection.replies && messages.length > 1) {
-        await mdGenerator.generateThreadMarkdown(thread, messages, task.guildName, task.channelName, postDir)
-      }
-    }
-
-    if (this.exportOptions.formats.includes('json')) {
-      new JsonExporter().exportThread(thread, messages, postDir)
-    }
-
-    if (this.exportOptions.formats.includes('html')) {
-      await new HtmlGenerator(assetMap).generatePostHtml(thread, messages, task.guildName, task.channelName, postDir)
-    }
-
-    // Premium Exports (PDF with Unicode Fix)
-    if (this.exportOptions.formats.includes('pdf')) {
-      try {
-        const pdfDoc = await PDFDocument.create()
-        pdfDoc.registerFontkit(fontkit)
-
-        let customFont: any;
-        let isCustomFontLoaded = false;
-        try {
-          // Cross-environment font path logic (Dev vs Prod/ASAR)
-          const isDev = !app.isPackaged;
-          const fontPath = isDev
-            ? path.join(process.cwd(), 'resources', 'fonts', 'Roboto-Regular.ttf')
-            : path.join(process.resourcesPath, 'fonts', 'Roboto-Regular.ttf');
-
-          if (fs.existsSync(fontPath)) {
-            const fontBytes = fs.readFileSync(fontPath);
-            customFont = await pdfDoc.embedFont(new Uint8Array(fontBytes));
-            isCustomFontLoaded = true;
-          } else {
-            console.warn('Font file not found at:', fontPath);
-          }
-        } catch (fontErr) {
-          console.error('Critical: Custom font embedding failed. Fallback to Helvetica initiated.', fontErr);
-        }
-
-        // Fallback to standard font if custom loading failed
-        if (!isCustomFontLoaded) {
-          customFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
-        }
-
-        let page = pdfDoc.addPage()
-        const { width, height } = page.getSize()
-        const margin = 50
-        const fontSize = 11
-
-        // Function to clean text based on font capabilities
-        const cleanText = (text: string) => {
-          if (!text) return '';
-          // If we have custom font, we still remove extremely rare chars that might not be in Roboto
-          // If we have Helvetica, we MUST remove everything non-WinAnsi to avoid crash (Issue #1)
-          if (!isCustomFontLoaded) {
-            return text.replace(/[^\x00-\x7F]/g, '?');
-          }
-          // With Roboto, we are much safer, but still limit to basic plane for pdf-lib stability
-          return text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
-        };
-
-        // Function to draw an image and adjust yOffset
-        const drawImage = async (imgUrl: string) => {
-          const localRelPath = assetMap.get(imgUrl);
-          if (!localRelPath) return;
-          const imgPath = path.join(postDir, localRelPath);
-          if (!fs.existsSync(imgPath)) return;
-
-          try {
-            const bytes = fs.readFileSync(imgPath);
-            const ext = path.extname(imgPath).toLowerCase();
-            let image;
-
-            // Convert to PNG/JPG buffer if needed or use sharp for optimal PDF size
-            const optimized = await sharp(bytes).resize({ width: 400, withoutEnlargement: true }).toBuffer();
-
-            if (ext === '.png') image = await pdfDoc.embedPng(optimized);
-            else if (['.jpg', '.jpeg'].includes(ext)) image = await pdfDoc.embedJpg(optimized);
-            else {
-              // Try to convert to PNG if it's gif/webp
-              const pngBuffer = await sharp(bytes).png().toBuffer();
-              image = await pdfDoc.embedPng(pngBuffer);
-            }
-
-            const dims = image.scale(0.8);
-            if (yOffset - dims.height < margin) {
-              page = pdfDoc.addPage();
-              yOffset = height - margin;
-            }
-            page.drawImage(image, { x: margin, y: yOffset - dims.height, width: dims.width, height: dims.height });
-            yOffset -= dims.height + 10;
-          } catch (e) {
-            console.error('Failed to embed image in PDF:', e);
-          }
-        };
-
-        // Function to draw generic attachment reference in PDF
-        const drawAttachmentRef = async (filename: string, size: number) => {
-          const text = `📎 [Archivo Adjunto] ${filename} (${cleanText(this.formatSize(size))})`;
-          if (yOffset - 20 < margin) {
-            page = pdfDoc.addPage();
-            yOffset = height - margin;
-          }
-          page.drawText(text, {
-            x: margin,
-            y: yOffset,
-            size: 9,
-            font: customFont,
-            color: rgb(0.3, 0.3, 0.8)
-          });
-          yOffset -= 15;
-        };
-
-        const safeThreadName = cleanText(thread.name || 'Thread');
-        page.drawText(safeThreadName, { x: margin, y: height - 40, size: 18, font: customFont })
-
-        let yOffset = height - 70;
-        for (const msg of messages) {
-          // Add author and date
-          const header = `${msg.author.username} (${new Date(msg.timestamp).toLocaleString()}):`;
-          const safeHeader = cleanText(header);
-          if (yOffset < margin + 20) { page = pdfDoc.addPage(); yOffset = height - margin; }
-          page.drawText(safeHeader, { x: margin, y: yOffset, size: 10, font: customFont, color: rgb(0.4, 0.4, 0.4) });
-          yOffset -= 15;
-
-          const content = (msg.content || '').trim();
-          if (content) {
-            const lines = content.split('\n');
-            for (const rawLine of lines) {
-              const safeLine = cleanText(rawLine);
-              const words = safeLine.split(' ');
-              let currentLine = '';
-              for (const word of words) {
-                const testLine = currentLine ? `${currentLine} ${word}` : word;
-                const textWidth = (customFont as any).widthOfTextAtSize(testLine, fontSize);
-                if (textWidth > width - 2 * margin) {
-                  if (yOffset < margin) { page = pdfDoc.addPage(); yOffset = height - margin; }
-                  page.drawText(currentLine, { x: margin, y: yOffset, size: fontSize, font: customFont });
-                  yOffset -= fontSize + 4;
-                  currentLine = word;
-                } else {
-                  currentLine = testLine;
-                }
-              }
-              if (currentLine) {
-                if (yOffset < margin) { page = pdfDoc.addPage(); yOffset = height - margin; }
-                page.drawText(currentLine, { x: margin, y: yOffset, size: fontSize, font: customFont });
-                yOffset -= fontSize + 6;
-              }
-            }
-          }
-
-          // Attachments (Images and Generic Files)
-          for (const attachment of msg.attachments) {
-            const ext = path.extname(attachment.filename).toLowerCase()
-            const isImage = attachment.content_type?.startsWith('image/') || ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)
-
-            if (isImage && assetMap.has(attachment.url)) {
-              await drawImage(attachment.url);
-            } else if (assetMap.has(attachment.url)) {
-              // List as attachment link for PDF
-              await drawAttachmentRef(attachment.filename, attachment.size);
-            }
-          }
-          yOffset -= 10;
-        }
-
-        const pdfBytes = await pdfDoc.save()
-        fs.writeFileSync(path.join(postDir, 'export.pdf'), pdfBytes)
-      } catch (pdfErr) {
-        console.error('Fatal: PDF generation crashed despite sanitization:', pdfErr);
-      }
-    }
-
-    if (this.exportOptions.formats.includes('epub')) {
-      const epubConstructor = (Epub as any).default || Epub;
-      const epubData = await epubConstructor(
-        { title: thread.name || 'Thread Export', author: messages[0]?.author?.username || 'System' },
-        [{ title: 'Main', content: messages.map(m => `<p><b>${m.author.username}</b>: ${m.content || ''}</p>`).join('') }]
-      )
-      fs.writeFileSync(path.join(postDir, 'export.epub'), Buffer.from(epubData as any))
-    }
+    const tags = this.taskTags.get(task.id) || []
+    await this.runExports(thread, messages, task, postDir, assetMap, tags)
 
     CacheManager.recordPostSync(thread, messages, postDir, totalSize)
+
     if (this.exportOptions.includeToc) {
-      const indexDir = folderBuilder.getForumDirectory(task.guildName, task.channelName)
-      IndexGenerator.generateIndex(indexDir, task.channelName, db.getCachedPostsByChannel(task.channelId))
+      this.scheduleIndex(task.guildName, task.channelName, thread.parent_id || task.channelId)
     }
 
-    // Persist a lightweight download history record for post-export auditing.
-    try {
-      db.recordDownloadHistory({
-        queue_id: parseInt(task.id) || undefined,
-        thread_id: task.threadId,
-        guild_id: task.guildId,
-        channel_id: task.channelId,
-        guild_name: task.guildName,
-        channel_name: task.channelName,
-        thread_name: task.threadName,
-        status: 'done',
-        files_count: totalAssets || 0,
-        total_bytes: totalSize || 0,
-        download_path: postDir,
-        started_at: startedAt,
-        completed_at: new Date().toISOString()
-      })
-    } catch (e) {
-      console.warn('recordDownloadHistory failed:', (e as Error).message)
-    }
+    db.recordDownloadHistory({
+      queue_id: parseInt(task.id, 10) || undefined,
+      thread_id: task.threadId,
+      guild_id: task.guildId,
+      channel_id: task.channelId,
+      guild_name: task.guildName,
+      channel_name: task.channelName,
+      thread_name: task.threadName,
+      status: 'done',
+      files_count: progress.get().assetsTotal,
+      total_bytes: totalSize,
+      download_path: postDir,
+      started_at: startedAt,
+      completed_at: new Date().toISOString()
+    })
 
     progress.update({ phase: 'done' })
     this.emitProgress(task.id, progress.get())
   }
 
+  private buildThread(
+    task: DownloadTask,
+    channel: Awaited<ReturnType<DiscordClient['getChannel']>>,
+    messages: DiscordMessage[]
+  ): DiscordThread {
+    const raw = channel as unknown as Partial<DiscordThread>
+    if (raw.thread_metadata) {
+      return {
+        ...(raw as DiscordThread),
+        last_message_id: messages[messages.length - 1]?.id || raw.last_message_id || null,
+        message_count: messages.length
+      }
+    }
+
+    // Canal de texto / DM: el propio canal actúa como "hilo".
+    return {
+      id: channel.id,
+      guild_id: channel.guild_id || task.guildId,
+      // parent_id ES el canal: así cached_posts.channel_id queda correcto.
+      parent_id: channel.id,
+      owner_id: messages[0]?.author?.id || '',
+      name: channel.name || task.threadName || `Chat ${channel.id}`,
+      type: channel.type,
+      last_message_id: messages[messages.length - 1]?.id || null,
+      message_count: messages.length,
+      member_count: 0,
+      total_message_sent: messages.length,
+      applied_tags: [],
+      thread_metadata: {
+        archived: false,
+        auto_archive_duration: 0,
+        archive_timestamp: new Date().toISOString(),
+        locked: false
+      },
+      created_timestamp: messages[0]?.timestamp || new Date().toISOString()
+    }
+  }
+
+  // ----------- Recursos -----------
+
+  private async downloadAssets(
+    messages: DiscordMessage[],
+    postDir: string,
+    taskId: string,
+    progress: TaskTracker,
+    signal: AbortSignal
+  ): Promise<{ assetMap: Map<string, string>; totalSize: number }> {
+    const plan = this.planAssets(messages)
+    const assetMap = new Map<string, string>()
+
+    const totalBytes = plan.reduce((sum, asset) => sum + (asset.size || 0), 0)
+    progress.update({ assetsTotal: plan.length, bytesTotal: totalBytes })
+
+    let totalSize = 0
+    let done = 0
+
+    for (const asset of plan) {
+      if (signal.aborted) throw new Error('cancelled')
+
+      const deduped = this.deduplicator.check(asset.fileId, postDir)
+      if (deduped) {
+        for (const key of [asset.url, ...asset.aliases]) assetMap.set(key, deduped)
+        totalSize += asset.size || 0
+        done++
+        progress.update({ assetsDownloaded: done })
+        this.emitProgress(taskId, progress.get())
+        continue
+      }
+
+      try {
+        const result = await this.fileDownloader.download({
+          url: asset.url,
+          postDir,
+          subDir: asset.subDir,
+          filename: asset.filename,
+          preserveFilename: this.exportOptions.preserveFilenames,
+          maxFileSize: this.exportOptions.maxFileSize,
+          signal,
+          onProgress: (bytes) => {
+            progress.update({
+              bytesDownloaded: progress.get().bytesDownloaded + bytes,
+              currentFile: asset.filename
+            })
+            this.emitProgress(taskId, progress.get())
+          }
+        })
+
+        for (const key of [asset.url, ...asset.aliases]) assetMap.set(key, result.relativePath)
+        this.deduplicator.record(asset.fileId, result.relativePath)
+        totalSize += result.size
+
+        db.upsertCachedFile({
+          file_id: asset.fileId,
+          message_id: asset.messageId,
+          original_url: asset.url,
+          local_path: result.localPath,
+          file_hash: result.hash,
+          file_size: result.size,
+          mime_type: 'application/octet-stream',
+          filename: asset.filename,
+          downloaded_at: new Date().toISOString(),
+          still_valid: true
+        })
+      } catch (error) {
+        if ((error as Error).message === 'cancelled') throw error
+        // Un adjunto caído no debe tumbar el archivo completo.
+        console.warn(`[download] ${asset.filename}: ${(error as Error).message}`)
+      }
+
+      done++
+      progress.update({ assetsDownloaded: done })
+      this.emitProgress(taskId, progress.get())
+    }
+
+    return { assetMap, totalSize }
+  }
+
+  private planAssets(messages: DiscordMessage[]): PlannedAsset[] {
+    const plan = new Map<string, PlannedAsset>()
+    const sel = this.contentSelection
+    const maxSize = this.exportOptions.maxFileSize || 0
+
+    const add = (asset: PlannedAsset): void => {
+      if (!asset.url) return
+      if (maxSize > 0 && asset.size > maxSize) return
+      const existing = plan.get(asset.url)
+      if (existing) {
+        for (const alias of asset.aliases) {
+          if (!existing.aliases.includes(alias)) existing.aliases.push(alias)
+        }
+        return
+      }
+      plan.set(asset.url, asset)
+    }
+
+    const seenAuthors = new Set<string>()
+
+    for (const msg of messages) {
+      for (const att of msg.attachments) {
+        const subDir = kindOf(att.content_type, att.filename)
+        if (subDir === 'images' && !sel.images) continue
+        if (subDir === 'videos' && !sel.videos) continue
+        if (subDir === 'files' && !sel.files) continue
+
+        add({
+          url: att.url,
+          aliases: [att.proxy_url].filter(Boolean) as string[],
+          filename: att.filename,
+          subDir,
+          fileId: att.id,
+          messageId: msg.id,
+          size: att.size || 0
+        })
+      }
+
+      if (sel.embeds) {
+        for (const embed of msg.embeds) {
+          for (const media of [embed.image, embed.thumbnail, embed.video]) {
+            if (!media?.url) continue
+            const isVideo = media === embed.video
+            if (isVideo && !sel.videos) continue
+            if (!isVideo && !sel.images) continue
+            const name = path.basename(new URL(media.url).pathname) || `embed-${msg.id}`
+            add({
+              url: media.url,
+              aliases: media.proxy_url ? [media.proxy_url] : [],
+              filename: decodeURIComponent(name),
+              subDir: isVideo ? 'videos' : 'images',
+              fileId: `embed:${msg.id}:${media.url}`,
+              messageId: msg.id,
+              size: 0
+            })
+          }
+        }
+      }
+
+      if (this.exportOptions.includeStickers && sel.stickers) {
+        for (const sticker of msg.sticker_items || []) {
+          if (sticker.format_type === 3) continue // Lottie no es una imagen
+          const ext: 'png' | 'gif' = sticker.format_type === 4 ? 'gif' : 'png'
+          const url = ENDPOINTS.STICKER(sticker.id, ext)
+          add({
+            url,
+            aliases: [],
+            filename: `${sticker.name}.${ext}`,
+            subDir: 'images',
+            fileId: `sticker:${sticker.id}`,
+            messageId: msg.id,
+            size: 0
+          })
+        }
+      }
+
+      if (this.exportOptions.includeCustomEmojis && sel.customEmojis) {
+        const emojiRe = /<(a?):(\w+):(\d+)>/g
+        let match: RegExpExecArray | null
+        while ((match = emojiRe.exec(msg.content || '')) !== null) {
+          const [, animated, name, id] = match
+          const url = ENDPOINTS.CUSTOM_EMOJI(id, animated === 'a')
+          add({
+            url,
+            aliases: [],
+            filename: `${name}.${animated === 'a' ? 'gif' : 'png'}`,
+            subDir: 'images',
+            fileId: `emoji:${id}`,
+            messageId: msg.id,
+            size: 0
+          })
+        }
+      }
+
+      if (this.exportOptions.includeAvatars && sel.avatars && msg.author?.avatar) {
+        if (!seenAuthors.has(msg.author.id)) {
+          seenAuthors.add(msg.author.id)
+          const base = ENDPOINTS.USER_AVATAR(msg.author.id, msg.author.avatar)
+          add({
+            url: `${base}?size=128`,
+            aliases: [base, `${base}?size=80`, `${base}?size=64`, `${base}?size=48`],
+            filename: `avatar-${msg.author.username}.png`,
+            subDir: 'images',
+            fileId: `avatar:${msg.author.id}:${msg.author.avatar}`,
+            messageId: msg.id,
+            size: 0
+          })
+        }
+      }
+    }
+
+    return Array.from(plan.values())
+  }
+
+  // ----------- Exportación -----------
+
+  private async runExports(
+    thread: DiscordThread,
+    messages: DiscordMessage[],
+    task: DownloadTask,
+    postDir: string,
+    assetMap: Map<string, string>,
+    tags: ForumTag[]
+  ): Promise<void> {
+    const formats = this.exportOptions.formats
+    const mode = this.exportOptions.threadMode
+
+    if (formats.includes('markdown')) {
+      const generator = new MarkdownGenerator(this.mdParser, assetMap, mode)
+      const selection = {
+        text: this.contentSelection.text,
+        embeds: this.contentSelection.embeds,
+        metadata: this.contentSelection.metadata,
+        stickers: this.contentSelection.stickers
+      }
+      await generator.generatePostMarkdown(
+        thread, messages, task.guildName, task.channelName, postDir, tags, selection
+      )
+      // El generador decide si escribe thread.md, replies/ o ambos según threadMode.
+      await generator.generateThreadMarkdown(
+        thread, messages, task.guildName, task.channelName, postDir, tags, selection
+      )
+    }
+
+    if (formats.includes('json')) {
+      new JsonExporter().exportThread(thread, messages, postDir)
+    }
+
+    if (formats.includes('html')) {
+      await new HtmlGenerator(assetMap).generatePostHtml(
+        thread,
+        messages,
+        task.guildName,
+        task.channelName,
+        postDir
+      )
+    }
+
+    if (formats.includes('pdf')) {
+      try {
+        await PdfGenerator.generate({ thread, messages, outputDir: postDir, assetMap })
+      } catch (error) {
+        console.error('[pdf] no se pudo generar:', (error as Error).message)
+      }
+    }
+
+    if (formats.includes('epub')) {
+      try {
+        const buffer = await buildEpub(thread, messages, assetMap)
+        fs.writeFileSync(path.join(postDir, 'export.epub'), buffer)
+      } catch (error) {
+        console.error('[epub] no se pudo generar:', (error as Error).message)
+      }
+    }
+  }
+
+  // ----------- Índice (una sola vez por lote) -----------
+
+  private scheduleIndex(guildName: string, channelName: string, channelId: string): void {
+    try {
+      const forumDir = new FolderBuilder(this.exportOptions).getForumDirectory(guildName, channelName)
+      this.pendingIndexes.set(forumDir, { channelName, channelId })
+      if (this.indexTimer) clearTimeout(this.indexTimer)
+      this.indexTimer = setTimeout(() => this.flushIndexes(), 1500)
+    } catch (error) {
+      console.warn('[index] no se pudo programar:', (error as Error).message)
+    }
+  }
+
+  private flushIndexes(): void {
+    if (this.indexTimer) {
+      clearTimeout(this.indexTimer)
+      this.indexTimer = null
+    }
+    for (const [forumDir, target] of this.pendingIndexes) {
+      try {
+        const posts = db.getCachedPostsByChannel(target.channelId)
+        IndexGenerator.generateIndex(forumDir, target.channelName, posts)
+      } catch (error) {
+        console.warn('[index] no se pudo generar:', (error as Error).message)
+      }
+    }
+    this.pendingIndexes.clear()
+  }
+
+  // ----------- Progreso -----------
+
   private emitProgress(taskId: string, progress: PostProgress): void {
+    const now = Date.now()
+    const last = this.lastProgressEmit.get(taskId) || 0
+    const isTerminal = progress.phase === 'done'
+    if (!isTerminal && now - last < 120) return
+    this.lastProgressEmit.set(taskId, now)
+
     const task = this.activeTasks.get(taskId)
     if (task) {
       task.progress = {
@@ -613,60 +740,97 @@ export class DownloadManager extends EventEmitter {
     this.emit('task-progress', taskId, progress)
   }
 
-  getQueue(): DownloadTask[] { return Array.from(this.activeTasks.values()) }
-  pauseAll(): void { this.paused = true }
-  resumeAll(): void { this.paused = false; this.processQueue() }
+  // ----------- Control -----------
+
+  getQueue(): DownloadTask[] {
+    return Array.from(this.activeTasks.values())
+  }
+
+  getActiveCount(): number {
+    return this.running
+  }
+
+  pauseAll(): void {
+    this.paused = true
+    for (const task of this.activeTasks.values()) {
+      if (task.status === 'queued') {
+        task.status = 'paused'
+        db.updateQueueStatus(parseInt(task.id, 10), 'paused')
+      }
+    }
+    this.emit('queue-updated', this.getQueue())
+  }
+
+  resumeAll(): void {
+    this.paused = false
+    for (const task of this.activeTasks.values()) {
+      if (task.status === 'paused') {
+        task.status = 'queued'
+        db.updateQueueStatus(parseInt(task.id, 10), 'queued')
+      }
+    }
+    this.emit('queue-updated', this.getQueue())
+    void this.processQueue()
+  }
+
   cancelTask(taskId: string): void {
     const task = this.activeTasks.get(taskId)
-    if (task) {
-      task.status = 'cancelled'
-      db.updateQueueStatus(parseInt(taskId), 'cancelled')
-      this.emit('task-cancelled', taskId)
-      this.emit('queue-updated', this.getQueue())
-    }
+    if (!task) return
+    if (task.status === 'done' || task.status === 'error') return
+
+    task.status = 'cancelled'
+    db.updateQueueStatus(parseInt(taskId, 10), 'cancelled')
+    this.controllers.get(taskId)?.abort()
+    this.emit('task-cancelled', taskId)
+    this.emit('queue-updated', this.getQueue())
   }
 
   cancelAll(): void {
     for (const task of this.activeTasks.values()) {
-      if (task.status === 'queued' || task.status === 'downloading') {
+      if (task.status === 'queued' || task.status === 'downloading' || task.status === 'paused') {
         task.status = 'cancelled'
-        db.updateQueueStatus(parseInt(task.id), 'cancelled')
+        db.updateQueueStatus(parseInt(task.id, 10), 'cancelled')
+        this.controllers.get(task.id)?.abort()
       }
     }
     this.emit('queue-updated', this.getQueue())
   }
 
   clearCompleted(): void {
-    for (const [id, task] of this.activeTasks.entries()) {
+    const removable: number[] = []
+    for (const [id, task] of this.activeTasks) {
       if (task.status === 'done' || task.status === 'cancelled' || task.status === 'error') {
         this.activeTasks.delete(id)
+        this.lastProgressEmit.delete(id)
+        this.taskTags.delete(id)
+        const numeric = parseInt(id, 10)
+        if (!Number.isNaN(numeric)) removable.push(numeric)
       }
     }
+    db.deleteQueueItems(removable)
     this.emit('queue-updated', this.getQueue())
   }
 
   async retryTask(taskId: string): Promise<void> {
     const task = this.activeTasks.get(taskId)
-    if (task && task.status === 'error') {
-      task.status = 'queued'
-      task.retryCount++
-      db.updateQueueStatus(parseInt(taskId), 'queued')
-      db.incrementRetryCount(parseInt(taskId))
-      this.emit('queue-updated', this.getQueue())
-      this.processQueue()
-    }
-  }
-  getActiveCount(): number { return this.running }
-  destroy(): void {
-    this.paused = true
-    this.activeTasks.clear()
-    this.removeAllListeners()
+    if (!task) return
+    if (task.status !== 'error' && task.status !== 'cancelled') return
+
+    task.status = 'queued'
+    task.errorMessage = undefined
+    task.retryCount++
+    db.updateQueueStatus(parseInt(taskId, 10), 'queued')
+    db.incrementRetryCount(parseInt(taskId, 10))
+    this.emit('queue-updated', this.getQueue())
+    void this.processQueue()
   }
 
-  private formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
-    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`
-    return `${(bytes / 1073741824).toFixed(1)} GB`
+  destroy(): void {
+    this.destroyed = true
+    this.paused = true
+    for (const controller of this.controllers.values()) controller.abort()
+    this.controllers.clear()
+    this.flushIndexes()
+    this.removeAllListeners()
   }
 }

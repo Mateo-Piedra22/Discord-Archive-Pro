@@ -1,131 +1,297 @@
-import React, { useState, useEffect } from 'react'
-import { Compass, DownloadCloud, Archive, Settings, ChevronRight, Minus, Square, X, Info } from 'lucide-react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import {
+  Compass, DownloadCloud, Archive, Settings2, Info, LayoutDashboard,
+  Minus, Square, Copy, X, Sun, Moon, Loader2, Command, Search
+} from 'lucide-react'
 import { useAuthStore } from './stores/authStore'
 import { useBrowserStore } from './stores/browserStore'
 import { useDownloadStore } from './stores/downloadStore'
+import { useUiStore, type Vista } from './stores/uiStore'
 import { useToast, ToastContainer } from './components/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import TokenSetup from './components/TokenSetup'
-import ExploreView from './components/explore/ExploreView'
-import PostList from './components/PostList'
-import DownloadsView from './components/DownloadsView'
-import SettingsView from './components/SettingsView'
-import ArchiveViewer from './components/ArchiveViewer'
-import AboutView from './components/AboutView'
 import logoUrl from './assets/logo.png'
 
-type Tab = 'browse' | 'downloads' | 'archive' | 'settings' | 'about'
-type BrowseStep = 'explore' | 'posts'
+// Las vistas pesadas se cargan bajo demanda: el bundle inicial solo trae
+// el armazón. El visor de archivo (epubjs, resaltado de código) es el que
+// más pesa y no se necesita hasta que el usuario entra.
+const DashboardView = lazy(() => import('./components/DashboardView'))
+const ExploreLayout = lazy(() => import('./components/explore/ExploreLayout'))
+const DownloadsView = lazy(() => import('./components/DownloadsView'))
+const SettingsView = lazy(() => import('./components/SettingsView'))
+const ArchiveViewer = lazy(() => import('./components/ArchiveViewer'))
+const AboutView = lazy(() => import('./components/AboutView'))
 
-export default function App() {
-  const { status, validate } = useAuthStore()
-  const { initListeners, queue } = useDownloadStore()
-  const { selectedGuild, selectedChannel } = useBrowserStore()
-  const { toasts, removeToast } = useToast()
+// Capas superpuestas: solo se descargan cuando se abren por primera vez.
+const LiveThreadView = lazy(() => import('./components/LiveThreadView'))
+const CommandPalette = lazy(() => import('./components/CommandPalette'))
+const ShortcutsSheet = lazy(() => import('./components/ShortcutsSheet'))
+const SearchOverlay = lazy(() => import('./components/SearchOverlay'))
 
-  const [activeTab, setActiveTab] = useState<Tab>('browse')
-  const [browseStep, setBrowseStep] = useState<BrowseStep>('explore')
+const VISTAS: { id: Vista; etiqueta: string; icono: typeof Compass }[] = [
+  { id: 'panel', etiqueta: 'Panel', icono: LayoutDashboard },
+  { id: 'explorar', etiqueta: 'Explorar', icono: Compass },
+  { id: 'cola', etiqueta: 'Cola', icono: DownloadCloud },
+  { id: 'archivo', etiqueta: 'Archivo', icono: Archive },
+  { id: 'ajustes', etiqueta: 'Ajustes', icono: Settings2 },
+  { id: 'legal', etiqueta: 'Legal', icono: Info }
+]
 
-  useEffect(() => {
-    validate()
-    initListeners()
-    const savedZoom = localStorage.getItem('ui_zoom')
-    if (savedZoom) {
-      window.api.window.setZoom(Number(savedZoom))
-    }
-  }, [])
+const TEMA_KEY = 'ui_theme'
 
-  useEffect(() => {
-    if (selectedChannel) setBrowseStep('posts')
-    else setBrowseStep('explore')
-  }, [selectedChannel])
+function leerTema(): 'dark' | 'light' {
+  const guardado = localStorage.getItem(TEMA_KEY)
+  return guardado === 'light' ? 'light' : 'dark'
+}
 
-  const activeDownloads = queue.filter(t => t.status === 'downloading' || t.status === 'queued').length
-
+function Cargando() {
   return (
-    <div className="app">
-      {/* Title Bar */}
-      <div className="titlebar">
-        <div className="titlebar__left">
-          <div className={`dot dot--${status === 'connected' ? 'green' : status === 'connecting' ? 'amber' : 'off'}`} />
-          <img src={logoUrl} alt="Logo" style={{ width: 14, height: 14, marginLeft: 6, marginRight: 4 }} />
-          <span className="titlebar__title" style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Discord Archive Pro</span>
-        </div>
-        <div className="titlebar__controls">
-          <button className="wc" onClick={() => window.api.window.minimize()} title="Minimizar"><Minus size={10} /></button>
-          <button className="wc" onClick={() => window.api.window.toggleMaximize()} title="Maximizar"><Square size={10} /></button>
-          <button className="wc wc--close" onClick={() => window.api.window.close()} title="Cerrar"><X size={10} /></button>
-        </div>
-      </div>
-
-      {status !== 'connected' ? (
-        <TokenSetup />
-      ) : (
-        <>
-          {/* Tabs */}
-          <nav className="tabs">
-            {([
-              { key: 'browse' as Tab, label: 'Explorar', icon: <Compass size={15} /> },
-              { key: 'downloads' as Tab, label: 'Descargas', icon: <DownloadCloud size={15} />, badge: activeDownloads },
-              { key: 'archive' as Tab, label: 'Archivo', icon: <Archive size={15} /> },
-              { key: 'settings' as Tab, label: 'Config', icon: <Settings size={15} /> },
-              { key: 'about' as Tab, label: 'Legal', icon: <Info size={15} /> },
-            ]).map(t => (
-              <button
-                key={t.key}
-                className={`tabs__item${activeTab === t.key ? ' tabs__item--active' : ''}`}
-                onClick={() => setActiveTab(t.key)}
-              >
-                {t.icon}
-                {t.label}
-                {t.badge ? <span className="tabs__badge">{t.badge}</span> : null}
-              </button>
-            ))}
-          </nav>
-
-          {/* Content */}
-          <main className="main">
-            <ErrorBoundary>
-              {activeTab === 'browse' && (selectedChannel ? <PostList /> : <ExploreView />)}
-              {activeTab === 'downloads' && <DownloadsView />}
-              {activeTab === 'archive' && <ArchiveViewer />}
-              {activeTab === 'settings' && <SettingsView />}
-              {activeTab === 'about' && <AboutView />}
-            </ErrorBoundary>
-          </main>
-        </>
-      )}
-
-      <ToastContainer toasts={toasts} onRemove={removeToast} />
+    <div className="empty">
+      <Loader2 size={20} className="muted girar" />
+      <span className="muted" style={{ fontSize: 'var(--text-md)' }}>Cargando…</span>
     </div>
   )
 }
 
-function DownloadAnimation() {
-  return (
-    <div className="dl-anim" style={{
-      width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center'
-    }}>
-      <div style={{
-        position: 'absolute', width: '120%', height: '120%',
-        background: 'radial-gradient(circle, var(--accent) 0%, transparent 60%)',
-        opacity: 0.1, filter: 'blur(30px)', animation: 'dlGlow 4s infinite alternate ease-in-out'
-      }} />
-      <svg width="120" height="120" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path className="dl-arrow" d="M12 3V16M12 16L7 11M12 16L17 11" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        <path className="dl-base" d="M20 21H4" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" opacity="0.4" />
-        <circle cx="12" cy="12" r="9" stroke="var(--accent)" strokeWidth="1" strokeDasharray="4 4" opacity="0.2" />
-      </svg>
-      <style>{`
-        @keyframes dlGlow { 0% { opacity: 0.1; transform: scale(0.9); } 100% { opacity: 0.2; transform: scale(1.1); } }
-        .dl-arrow { animation: dlArrow 2s infinite ease-in-out; }
-        @keyframes dlArrow { 
-          0%, 100% { transform: translateY(-3px); opacity: 0.4; } 
-          50% { transform: translateY(3px); opacity: 1; } 
+export default function App() {
+  const { status, user, validate } = useAuthStore()
+  const { initListeners, queue } = useDownloadStore()
+  const { selectedChannel, selectedGuild, selectChannel } = useBrowserStore()
+  const { toasts, removeToast } = useToast()
+
+  const {
+    vista, setVista, hilo, cerrarHilo,
+    paletaAbierta, setPaleta, atajosAbiertos, setAtajos,
+    busquedaAbierta, setBusqueda
+  } = useUiStore()
+
+  const [maximizado, setMaximizado] = useState(false)
+  const [tema, setTema] = useState<'dark' | 'light'>(leerTema)
+
+  // Tema: se aplica en <html> para que también afecte a los portales.
+  useEffect(() => {
+    document.documentElement.dataset.theme = tema
+    localStorage.setItem(TEMA_KEY, tema)
+  }, [tema])
+
+  // Arranque: validar sesión, escuchar la cola y restaurar el zoom.
+  useEffect(() => {
+    void validate()
+    const limpiarListeners = initListeners()
+
+    const factor = Number(localStorage.getItem('ui_zoom_factor') || '1')
+    window.api.window.setZoom(Number.isFinite(factor) ? factor : 1)
+
+    const quitarEstado = window.api.window.onStateChanged((estado) => setMaximizado(estado.maximized))
+    const quitarAuth = window.api.auth.onAutoConnected((conectado) => {
+      if (conectado) void validate()
+    })
+    void window.api.window.getState().then((estado) => setMaximizado(estado.maximized))
+
+    return () => {
+      limpiarListeners()
+      quitarEstado()
+      quitarAuth()
+    }
+  }, [])
+
+  // Navegación programática desde las vistas (por ejemplo «Ir a Ajustes»).
+  useEffect(() => {
+    const alNavegar = (evento: Event) => {
+      const destino = (evento as CustomEvent<string>).detail
+      if (VISTAS.some((v) => v.id === destino)) setVista(destino as Vista)
+    }
+    window.addEventListener('dap:navigate', alNavegar)
+    return () => window.removeEventListener('dap:navigate', alNavegar)
+  }, [setVista])
+
+  // Atajos globales de la ventana.
+  useEffect(() => {
+    const alPulsar = (evento: KeyboardEvent) => {
+      const ctrl = evento.ctrlKey || evento.metaKey
+
+      if (ctrl && evento.key.toLowerCase() === 'k') {
+        evento.preventDefault()
+        setPaleta(!paletaAbierta)
+        return
+      }
+      if (ctrl && evento.key.toLowerCase() === 'f') {
+        evento.preventDefault()
+        setBusqueda(true)
+        return
+      }
+      if (ctrl && evento.key === '/') {
+        evento.preventDefault()
+        setAtajos(!atajosAbiertos)
+        return
+      }
+      if (ctrl && !evento.shiftKey && !evento.altKey) {
+        const indice = Number(evento.key) - 1
+        if (indice >= 0 && indice < VISTAS.length) {
+          evento.preventDefault()
+          setVista(VISTAS[indice].id)
+          return
         }
-        .dl-base { animation: dlBase 2s infinite ease-in-out; }
-        @keyframes dlBase { 0%, 100% { transform: scaleX(0.8); } 50% { transform: scaleX(1.1); } }
-      `}</style>
+      }
+
+      if (evento.key === 'Escape') {
+        // Una capa con su propio manejo de Esc (visor de imágenes) tiene
+        // prioridad: si no, cerrar la imagen también salía del canal.
+        if (document.querySelector('.lightbox')) return
+        if (paletaAbierta) return setPaleta(false)
+        if (busquedaAbierta) return setBusqueda(false)
+        if (atajosAbiertos) return setAtajos(false)
+        if (hilo) return cerrarHilo()
+        if (vista === 'explorar' && selectedChannel) {
+          selectChannel(null)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', alPulsar)
+    return () => window.removeEventListener('keydown', alPulsar)
+  }, [
+    vista, selectedChannel, hilo, paletaAbierta, atajosAbiertos, busquedaAbierta,
+    setPaleta, setBusqueda, setAtajos, cerrarHilo, setVista, selectChannel
+  ])
+
+  const activas = queue.filter(
+    (t) => t.status === 'downloading' || t.status === 'queued' || t.status === 'paused'
+  ).length
+
+  const estadoConexion =
+    status === 'connected' ? 'ok' : status === 'connecting' ? 'busy' : 'off'
+
+  return (
+    <div className="app-shell">
+      {/* ---------- Barra de título ---------- */}
+      <header
+        className="titlebar"
+        onDoubleClick={() => window.api.window.toggleMaximize()}
+      >
+        <div className="titlebar__brand">
+          <img src={logoUrl} alt="" />
+          <span>Estrato</span>
+        </div>
+
+        <div className="titlebar__meta">
+          <span className="titlebar__status">
+            <span className={`dot dot--${estadoConexion}`} />
+            {status === 'connected'
+              ? user?.global_name || user?.username || 'Conectado'
+              : status === 'connecting'
+                ? 'Conectando…'
+                : 'Sin sesión'}
+          </span>
+          {selectedGuild && vista === 'explorar' && (
+            <span className="truncate" style={{ maxWidth: 220 }}>
+              {selectedGuild.name}
+              {selectedChannel ? ` · #${selectedChannel.name || 'chat'}` : ''}
+            </span>
+          )}
+        </div>
+
+        <div className="titlebar__spacer" />
+
+        <button
+          className="wc"
+          title="Paleta de comandos (Ctrl+K)"
+          onClick={() => setPaleta(true)}
+        >
+          <Command size={13} />
+        </button>
+
+        <div className="window-controls">
+          <button className="wc" title="Minimizar" onClick={() => window.api.window.minimize()}>
+            <Minus size={13} />
+          </button>
+          <button
+            className="wc"
+            title={maximizado ? 'Restaurar' : 'Maximizar'}
+            onClick={() => window.api.window.toggleMaximize()}
+          >
+            {maximizado ? <Copy size={11} /> : <Square size={11} />}
+          </button>
+          <button className="wc wc--close" title="Cerrar" onClick={() => window.api.window.close()}>
+            <X size={13} />
+          </button>
+        </div>
+      </header>
+
+      {/* ---------- Cuerpo ---------- */}
+      {status !== 'connected' ? (
+        <TokenSetup />
+      ) : (
+        <div className="app-body">
+          <nav className="rail">
+            <div className="rail__brand" title="Estrato">
+              <img src={logoUrl} alt="" />
+            </div>
+
+            {VISTAS.map((item, indice) => {
+              const Icono = item.icono
+              const activa = vista === item.id
+              return (
+                <button
+                  key={item.id}
+                  className={`rail__item${activa ? ' rail__item--active' : ''}`}
+                  onClick={() => setVista(item.id)}
+                  title={`${item.etiqueta} (Ctrl+${indice + 1})`}
+                >
+                  <Icono size={17} strokeWidth={activa ? 2.1 : 1.8} />
+                  <span className="rail__label">{item.etiqueta}</span>
+                  {item.id === 'cola' && activas > 0 && (
+                    <span className="rail__badge">{activas > 99 ? '99+' : activas}</span>
+                  )}
+                </button>
+              )
+            })}
+
+            <div className="rail__spacer" />
+
+            <div className="rail__foot">
+              <button
+                className="rail__item"
+                onClick={() => setBusqueda(true)}
+                title="Buscar en el archivo (Ctrl+F)"
+              >
+                <Search size={16} />
+                <span className="rail__label">Buscar</span>
+              </button>
+              <button
+                className="rail__item"
+                onClick={() => setTema(tema === 'dark' ? 'light' : 'dark')}
+                title={tema === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+              >
+                {tema === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              </button>
+            </div>
+          </nav>
+
+          <main className="workspace">
+            <ErrorBoundary>
+              <Suspense fallback={<Cargando />}>
+                {vista === 'panel' && <DashboardView />}
+                {vista === 'explorar' && <ExploreLayout />}
+                {vista === 'cola' && <DownloadsView />}
+                {vista === 'archivo' && <ArchiveViewer />}
+                {vista === 'ajustes' && <SettingsView />}
+                {vista === 'legal' && <AboutView />}
+              </Suspense>
+            </ErrorBoundary>
+          </main>
+        </div>
+      )}
+
+      {/* ---------- Capas superpuestas ---------- */}
+      <Suspense fallback={null}>
+        {hilo && <LiveThreadView />}
+        {paletaAbierta && <CommandPalette />}
+        {atajosAbiertos && <ShortcutsSheet />}
+        {busquedaAbierta && <SearchOverlay />}
+      </Suspense>
+
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   )
 }

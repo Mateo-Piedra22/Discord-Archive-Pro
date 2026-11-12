@@ -1,41 +1,20 @@
 // ============================================================
-// Ultra-Precise Cache Manager — SHA-256 fingerprinting at
-// thread, message, content, attachment, and metadata levels.
-// Delta sync: only downloads what actually changed.
+// Gestor de caché — huellas SHA-256 de contenido y metadatos para
+// decidir si un hilo necesita reexportarse.
 // ============================================================
 
 import crypto from 'crypto'
-import fs from 'fs'
-import type {
-  DiscordThread,
-  DiscordMessage,
-  CachedPostRecord,
-  CachedMessageRecord
-} from '../discord/types'
+import type { DiscordThread, DiscordMessage, CachedPostRecord } from '../discord/types'
 import {
   getCachedPost,
-  getCachedMessages,
-  getCachedMessage,
   upsertCachedPost,
   upsertCachedMessage,
   upsertCachedUser,
-  updatePostSyncStatus,
   runInTransaction
 } from './database'
 
-export type SyncCheckResult = {
-  needsSync: boolean
-  reason: 'not_cached' | 'new_messages' | 'edited_messages' | 'metadata_changed' | 'up_to_date'
-  details: {
-    newMessageIds?: string[]
-    editedMessageIds?: string[]
-    deletedMessageIds?: string[]
-    metadataChanged?: boolean
-  }
-}
-
 export class CacheManager {
-  // ----------- Hash Computation -----------
+  // ----------- Huellas -----------
 
   static computeContentHash(messages: DiscordMessage[]): string {
     const hash = crypto.createHash('sha256')
@@ -43,13 +22,11 @@ export class CacheManager {
       hash.update(msg.id)
       hash.update(msg.content || '')
       hash.update(msg.edited_timestamp || '')
-      // Include attachment URLs in content hash
       for (const att of msg.attachments) {
         hash.update(att.id)
         hash.update(att.filename)
         hash.update(att.size.toString())
       }
-      // Include embed data
       for (const embed of msg.embeds) {
         hash.update(JSON.stringify(embed))
       }
@@ -61,7 +38,7 @@ export class CacheManager {
     const hash = crypto.createHash('sha256')
     hash.update(message.content || '')
     hash.update(message.edited_timestamp || '')
-    if (message.embeds) hash.update(JSON.stringify(message.embeds))
+    if (message.embeds?.length) hash.update(JSON.stringify(message.embeds))
     return hash.digest('hex')
   }
 
@@ -76,129 +53,38 @@ export class CacheManager {
     return hash.digest('hex')
   }
 
-  static computeMetadataHash(thread: DiscordThread, reactions?: Record<string, number>): string {
+  static computeMetadataHash(thread: DiscordThread): string {
     const hash = crypto.createHash('sha256')
     hash.update(thread.name || '')
     hash.update(JSON.stringify(thread.applied_tags || []))
-    hash.update(thread.thread_metadata.locked ? '1' : '0')
-    hash.update(thread.thread_metadata.archived ? '1' : '0')
-    if (reactions) hash.update(JSON.stringify(reactions))
+    hash.update(thread.thread_metadata?.locked ? '1' : '0')
+    hash.update(thread.thread_metadata?.archived ? '1' : '0')
     return hash.digest('hex')
   }
 
-  static computeFileHash(filePath: string): string {
-    const content = fs.readFileSync(filePath)
-    return crypto.createHash('sha256').update(content).digest('hex')
-  }
+  // ----------- Estado -----------
 
-  static computeBufferHash(buffer: Buffer): string {
-    return crypto.createHash('sha256').update(buffer).digest('hex')
-  }
-
-  // ----------- Sync Checks -----------
-
-  static quickCheck(threadId: string, currentLastMessageId: string | null, currentMessageCount: number): SyncCheckResult {
-    const cached = getCachedPost(threadId)
-    if (!cached) {
-      return {
-        needsSync: true,
-        reason: 'not_cached',
-        details: {}
-      }
-    }
-
-    // Check if there are new messages
-    if (cached.last_message_id !== currentLastMessageId || cached.message_count !== currentMessageCount) {
-      return {
-        needsSync: true,
-        reason: 'new_messages',
-        details: {}
-      }
-    }
-
-    return {
-      needsSync: false,
-      reason: 'up_to_date',
-      details: {}
-    }
-  }
-
-  static deepCheck(
+  /**
+   * ¿El hilo está ya archivado y sin cambios?
+   * Compara el último mensaje y el conteo; si además el directorio de
+   * salida existe, no hace falta volver a descargar ni reexportar.
+   */
+  static isUpToDate(
     threadId: string,
-    currentThread: DiscordThread,
-    currentMessages: DiscordMessage[]
-  ): SyncCheckResult {
+    lastMessageId: string | null,
+    messageCount: number,
+    outputExists: boolean
+  ): boolean {
     const cached = getCachedPost(threadId)
-    if (!cached) {
-      return {
-        needsSync: true,
-        reason: 'not_cached',
-        details: {}
-      }
-    }
-
-    const cachedMessages = getCachedMessages(threadId)
-    const cachedMessageMap = new Map(cachedMessages.map(m => [m.message_id, m]))
-
-    const newMessageIds: string[] = []
-    const editedMessageIds: string[] = []
-    const currentMessageIds = new Set(currentMessages.map(m => m.id))
-
-    // Find new and edited messages
-    for (const msg of currentMessages) {
-      const cachedMsg = cachedMessageMap.get(msg.id)
-      if (!cachedMsg) {
-        newMessageIds.push(msg.id)
-      } else {
-        const newHash = CacheManager.computeMessageHash(msg)
-        if (newHash !== cachedMsg.content_hash) {
-          editedMessageIds.push(msg.id)
-        }
-        // Also check attachment changes
-        const newAttHash = CacheManager.computeAttachmentHash(msg)
-        if ((newAttHash || '') !== (cachedMsg.attachment_hash || '')) {
-          if (!editedMessageIds.includes(msg.id)) {
-            editedMessageIds.push(msg.id)
-          }
-        }
-      }
-    }
-
-    // Find deleted messages
-    const deletedMessageIds = cachedMessages
-      .filter(m => !currentMessageIds.has(m.message_id))
-      .map(m => m.message_id)
-
-    // Check metadata
-    const currentMetaHash = CacheManager.computeMetadataHash(currentThread)
-    const metadataChanged = currentMetaHash !== cached.metadata_hash
-
-    if (newMessageIds.length > 0 || editedMessageIds.length > 0 || deletedMessageIds.length > 0 || metadataChanged) {
-      let reason: SyncCheckResult['reason'] = 'up_to_date'
-      if (newMessageIds.length > 0) reason = 'new_messages'
-      else if (editedMessageIds.length > 0) reason = 'edited_messages'
-      else if (metadataChanged) reason = 'metadata_changed'
-
-      return {
-        needsSync: true,
-        reason,
-        details: {
-          newMessageIds,
-          editedMessageIds,
-          deletedMessageIds,
-          metadataChanged
-        }
-      }
-    }
-
-    return {
-      needsSync: false,
-      reason: 'up_to_date',
-      details: {}
-    }
+    if (!cached || !cached.download_path || !outputExists) return false
+    if (cached.sync_status !== 'synced') return false
+    return (
+      (cached.last_message_id || '') === (lastMessageId || '') &&
+      cached.message_count === messageCount
+    )
   }
 
-  // ----------- Cache Updates -----------
+  // ----------- Persistencia ----------
 
   static recordPostSync(
     thread: DiscordThread,
@@ -207,10 +93,8 @@ export class CacheManager {
     totalSize: number
   ): void {
     const now = new Date().toISOString()
-    const contentHash = CacheManager.computeContentHash(messages)
-    const metadataHash = CacheManager.computeMetadataHash(thread)
+    const existing = getCachedPost(thread.id)
 
-    // Count all files (attachments + embeds with media)
     let fileCount = 0
     for (const msg of messages) {
       fileCount += msg.attachments.length
@@ -219,7 +103,6 @@ export class CacheManager {
       }
     }
 
-    const existing = getCachedPost(thread.id)
     upsertCachedPost({
       thread_id: thread.id,
       guild_id: thread.guild_id,
@@ -227,10 +110,10 @@ export class CacheManager {
       title: thread.name,
       author_id: thread.owner_id,
       created_at: thread.created_timestamp,
-      last_message_id: thread.last_message_id || '',
+      last_message_id: thread.last_message_id || messages[messages.length - 1]?.id || '',
       message_count: messages.length,
-      content_hash: contentHash,
-      metadata_hash: metadataHash,
+      content_hash: CacheManager.computeContentHash(messages),
+      metadata_hash: CacheManager.computeMetadataHash(thread),
       first_synced: existing?.first_synced || now,
       last_synced: now,
       last_checked: now,
@@ -240,14 +123,9 @@ export class CacheManager {
       total_size: totalSize
     })
 
-    // Record individual messages and users in a transaction
     runInTransaction(() => {
       for (const msg of messages) {
-        // Cache the user object so we have the username/avatar for indexing and display
-        if (msg.author) {
-          upsertCachedUser(msg.author);
-        }
-
+        if (msg.author) upsertCachedUser(msg.author)
         upsertCachedMessage({
           message_id: msg.id,
           thread_id: thread.id,
@@ -263,32 +141,8 @@ export class CacheManager {
     })
   }
 
-  static markOutdated(threadId: string): void {
-    updatePostSyncStatus(threadId, 'outdated')
-  }
-
-  static markDeleted(threadId: string): void {
-    updatePostSyncStatus(threadId, 'deleted')
-  }
-
-  // ----------- File Integrity Check -----------
-
-  static verifyLocalFile(filePath: string, expectedHash: string): boolean {
-    try {
-      if (!fs.existsSync(filePath)) return false
-      const actualHash = CacheManager.computeFileHash(filePath)
-      return actualHash === expectedHash
-    } catch {
-      return false
-    }
-  }
-
-  static isPostCached(threadId: string): boolean {
-    return getCachedPost(threadId) !== null
-  }
-
   static getPostStatus(threadId: string): CachedPostRecord['sync_status'] | 'not_cached' {
     const cached = getCachedPost(threadId)
-    return cached ? cached.sync_status as CachedPostRecord['sync_status'] : 'not_cached'
+    return cached ? (cached.sync_status as CachedPostRecord['sync_status']) : 'not_cached'
   }
 }

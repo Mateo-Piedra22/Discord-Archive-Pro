@@ -1,22 +1,19 @@
 // ============================================================
-// Discord API Client — Real REST client using user token.
-// Conservative rate limiting, auto-retry, full error handling.
+// Discord API Client — Cliente REST real usando el token de usuario.
+// Rate limiting conservador, reintento automático, manejo completo de errores.
 // ============================================================
 
 import { ENDPOINTS } from './endpoints'
 import { RateLimiter } from './rate-limiter'
+import { isForum, isMessageCapable } from './types'
 import type {
   DiscordUser,
   DiscordGuild,
   DiscordChannel,
   DiscordMessage,
-  DiscordThread,
-  DiscordRole,
-  ChannelType,
-  ThreadSearchResponse,
-  ArchivedThreadsResponse,
   ForumTag,
-  ForumPost
+  ForumPost,
+  ThreadSearchResponse
 } from './types'
 
 export class DiscordApiError extends Error {
@@ -35,7 +32,6 @@ export class DiscordClient {
   private token: string
   private rateLimiter: RateLimiter
   private userCache = new Map<string, DiscordUser>()
-  private roleCache = new Map<string, DiscordRole[]>()
   private channelCache = new Map<string, DiscordChannel>()
 
   constructor(token: string) {
@@ -47,7 +43,7 @@ export class DiscordClient {
     return this.rateLimiter
   }
 
-  // ----------- Auth & User -----------
+  // ----------- Autenticación y usuario -----------
 
   async validateToken(): Promise<DiscordUser> {
     const user = await this.request<DiscordUser>('GET', ENDPOINTS.CURRENT_USER, 'user:me')
@@ -62,7 +58,7 @@ export class DiscordClient {
     return user
   }
 
-  // ----------- Guilds -----------
+  // ----------- Servidores -----------
 
   async getGuilds(): Promise<DiscordGuild[]> {
     const guilds = await this.request<DiscordGuild[]>('GET', ENDPOINTS.GUILDS, 'guilds:list')
@@ -77,19 +73,7 @@ export class DiscordClient {
     )
   }
 
-  async getGuildRoles(guildId: string): Promise<DiscordRole[]> {
-    const cached = this.roleCache.get(guildId)
-    if (cached) return cached
-    const roles = await this.request<DiscordRole[]>(
-      'GET',
-      ENDPOINTS.GUILD_ROLES(guildId),
-      `roles:${guildId}`
-    )
-    this.roleCache.set(guildId, roles)
-    return roles
-  }
-
-  // ----------- Channels -----------
+  // ----------- Canales -----------
 
   async getChannels(guildId: string): Promise<DiscordChannel[]> {
     if (guildId === '@me') {
@@ -102,21 +86,10 @@ export class DiscordClient {
       ENDPOINTS.GUILD_CHANNELS(guildId),
       `channels:${guildId}`
     )
-    // Cache them
     for (const ch of channels) {
       this.channelCache.set(ch.id, ch)
     }
     return channels
-  }
-
-  async getForumChannels(guildId: string): Promise<DiscordChannel[]> {
-    const channels = await this.getChannels(guildId)
-    if (guildId === '@me') {
-      return channels.filter(ch => ch.type === 1 || ch.type === 3)
-    }
-    return channels.filter(
-      ch => ch.type === 15 || ch.type === 16 || ch.type === 0 || ch.type === 5
-    )
   }
 
   async getChannel(channelId: string): Promise<DiscordChannel> {
@@ -131,7 +104,7 @@ export class DiscordClient {
     return channel
   }
 
-  // ----------- Forum Threads (Posts) -----------
+  // ----------- Hilos de foro (posts) -----------
 
   async searchForumThreads(
     channelId: string,
@@ -160,39 +133,33 @@ export class DiscordClient {
     return this.request<ThreadSearchResponse>('GET', url, `threads:search:${channelId}`)
   }
 
-  async getArchivedThreads(
-    channelId: string,
-    before?: string,
-    limit = 25
-  ): Promise<ArchivedThreadsResponse> {
-    const params = new URLSearchParams()
-    if (before) params.set('before', before)
-    params.set('limit', limit.toString())
-
-    const url = `${ENDPOINTS.ARCHIVED_PUBLIC_THREADS(channelId)}?${params.toString()}`
-    return this.request<ArchivedThreadsResponse>('GET', url, `threads:archived:${channelId}`)
-  }
-
-  // Enhanced: support a lightweight cancellation token so long-running
-  // forum fetches can be aborted from the main process. This keeps the
-  // client fully synchronous (no extra threads) while still allowing
-  // cooperative cancellation checks between network calls.
+  // Ampliado: admite un token de cancelación ligero para poder abortar
+  // desde el proceso principal las descargas de foro de larga duración.
+  // Así el cliente sigue siendo totalmente síncrono (sin hilos extra) pero
+  // permite comprobaciones cooperativas de cancelación entre llamadas de red.
   async getAllForumPosts(
     channelId: string,
     onProgress?: (count: number, total: number) => void,
-    // cancellation token shape: simple mutable object checked periodically
+    // forma del token de cancelación: objeto mutable simple comprobado periódicamente
     cancellationToken?: { cancelled?: boolean }
   ): Promise<ForumPost[]> {
     const channel = await this.getChannel(channelId)
 
-    // Si es un canal de texto estandar, devolvemos un único post que representa el canal completo
-    if ([0, 1, 3, 5].includes(channel.type)) {
-      if (onProgress) onProgress(1, 1)
+    // Foros y canales de media: se navegan como lista de posts (threads).
+    if (isForum(channel.type)) {
+      return this.searchAllForumPosts(channel, onProgress, cancellationToken)
+    }
+
+    // Canal de texto/DM: un único "post" que representa el canal completo.
+    // OJO: parent_id/id deben ser el propio canal — este valor se guarda como
+    // cached_posts.channel_id y de él dependen el índice y el "ya archivado".
+    if (isMessageCapable(channel.type)) {
+      onProgress?.(1, 1)
       return [{
         thread: {
           id: channel.id,
           guild_id: channel.guild_id || '@me',
-          parent_id: channel.parent_id || '',
+          parent_id: channel.id,
           owner_id: '',
           name: channel.name || `Chat ${channel.id}`,
           type: channel.type,
@@ -202,10 +169,10 @@ export class DiscordClient {
           total_message_sent: channel.total_message_sent || 0,
           applied_tags: [],
           thread_metadata: {
-             archived: false,
-             auto_archive_duration: 0,
-             archive_timestamp: new Date().toISOString(),
-             locked: false
+            archived: false,
+            auto_archive_duration: 0,
+            archive_timestamp: new Date().toISOString(),
+            locked: false
           },
           created_timestamp: new Date().toISOString()
         },
@@ -215,22 +182,27 @@ export class DiscordClient {
       }]
     }
 
-    const tags = channel.available_tags || []
-    const tagMap = new Map(tags.map(t => [t.id, t]))
+    // Voz, categoría, stage, directorio... no tienen historial que archivar.
+    onProgress?.(0, 0)
+    return []
+  }
+
+  private async searchAllForumPosts(
+    channel: DiscordChannel,
+    onProgress?: (count: number, total: number) => void,
+    cancellationToken?: { cancelled?: boolean }
+  ): Promise<ForumPost[]> {
+    const tagMap = new Map((channel.available_tags || []).map(t => [t.id, t]))
 
     const allPosts: ForumPost[] = []
     let offset = 0
     const limit = 25
     let total = 0
 
-    // Fetch active threads via search
     while (true) {
-      // Cooperative cancellation check: if cancelled, stop cleanly.
-      if (cancellationToken && cancellationToken.cancelled) {
-        // Throw a specific error so callers can detect cancellation.
-        throw new Error('fetch_cancelled')
-      }
-      const result = await this.searchForumThreads(channelId, {
+      if (cancellationToken?.cancelled) throw new Error('fetch_cancelled')
+
+      const result = await this.searchForumThreads(channel.id, {
         sort_by: 'creation_time',
         sort_order: 'desc',
         offset,
@@ -238,17 +210,16 @@ export class DiscordClient {
       })
 
       if (total === 0) total = result.total_results
-      if (onProgress) onProgress(allPosts.length, total)
+      onProgress?.(allPosts.length, total)
 
       for (const thread of result.threads) {
-        if (cancellationToken && cancellationToken.cancelled) {
-          throw new Error('fetch_cancelled')
-        }
+        if (cancellationToken?.cancelled) throw new Error('fetch_cancelled')
+
         const postTags = (thread.applied_tags || [])
           .map(tagId => tagMap.get(tagId))
           .filter((t): t is ForumTag => t !== undefined)
 
-        // first_messages is an array — find by matching channel_id to thread id
+        // first_messages es un array — se busca por coincidencia de channel_id con el id del hilo
         const firstMsg = (result.first_messages || []).find(m => m.channel_id === thread.id) || null
 
         allPosts.push({
@@ -263,11 +234,28 @@ export class DiscordClient {
       offset += limit
     }
 
-    if (onProgress) onProgress(allPosts.length, total)
+    onProgress?.(allPosts.length, total)
     return allPosts
   }
 
-  // ----------- Messages -----------
+  /**
+   * Una página de mensajes para el visor en vivo (sin descargar el hilo).
+   * Discord devuelve los mensajes más recientes primero cuando se usa
+   * `before`; aquí se invierten para que la lectura sea cronológica.
+   */
+  async getMessagePage(
+    threadId: string,
+    before?: string,
+    limit = 50
+  ): Promise<{ messages: DiscordMessage[]; hasMore: boolean }> {
+    const messages = await this.getThreadMessages(threadId, { before, limit })
+    return {
+      messages: [...messages].reverse(),
+      hasMore: messages.length === limit
+    }
+  }
+
+  // ----------- Mensajes -----------
 
   async getThreadMessages(
     threadId: string,
@@ -282,82 +270,54 @@ export class DiscordClient {
     return this.request<DiscordMessage[]>('GET', url, `messages:${threadId}`)
   }
 
+  /**
+   * Obtiene todos los mensajes de un canal/hilo.
+   * - Si se indica `afterId` → paginación delta hacia delante (solo mensajes más nuevos).
+   * - En caso contrario → paginación hacia atrás desde el mensaje más reciente.
+   * El resultado se deduplica por id y se ordena del más antiguo al más nuevo.
+   */
   async getAllThreadMessages(
     threadId: string,
     onProgress?: (count: number) => void,
     afterId?: string
   ): Promise<DiscordMessage[]> {
-    const allMessages: DiscordMessage[] = []
-    let before: string | undefined
-    let after: string | undefined = afterId
+    const seen = new Map<string, DiscordMessage>()
+    const forward = Boolean(afterId)
+    let cursor: string | undefined = afterId
+    const limit = 100
 
-    if (afterId) {
-      // Delta Sync: fetching forward
-      while (true) {
-        const messages = await this.getThreadMessages(threadId, {
-          after,
-          limit: 100
-        })
+    // Tope duro: 100 páginas × 100 mensajes = 10 mil mensajes por llamada.
+    // Tope de seguridad: 10.000 páginas × 100 mensajes = 1.000.000 de mensajes.
+    // El corte real lo marca el cursor, que debe avanzar en cada vuelta.
+    for (let page = 0; page < 10_000; page++) {
+      const messages = forward
+        ? await this.getThreadMessages(threadId, { after: cursor, limit })
+        : await this.getThreadMessages(threadId, { before: cursor, limit })
 
-        if (messages.length === 0) break
+      if (messages.length === 0) break
 
-        allMessages.push(...messages)
-        if (onProgress) onProgress(allMessages.length)
-
-        if (messages.length < 100) break
-        // Discord after API returns ascending, so the last is the newest
-        after = messages[messages.length - 1].id
+      for (const message of messages) {
+        if (!seen.has(message.id)) seen.set(message.id, message)
       }
-    } else {
-      // Original full fetch backward
-      while (true) {
-        const messages = await this.getThreadMessages(threadId, {
-          before,
-          limit: 100
-        })
+      onProgress?.(seen.size)
 
-        if (messages.length === 0) break
+      if (messages.length < limit) break
 
-        allMessages.push(...messages)
-        if (onProgress) onProgress(allMessages.length)
-
-        if (messages.length < 100) break
-        before = messages[messages.length - 1].id
-      }
+      // `after` y `before` devuelven ambos en orden ascendente, así que la última
+      // entrada es la más nueva para `after` y la más antigua para `before`.
+      const next = messages[messages.length - 1].id
+      if (next === cursor) break // el cursor no avanzó → se detiene en vez de repetir para siempre
+      cursor = next
     }
 
-    // Sort oldest first
-    allMessages.sort((a, b) => {
-      const dateA = new Date(a.timestamp).getTime()
-      const dateB = new Date(b.timestamp).getTime()
-      return dateA - dateB
+    return [...seen.values()].sort((a, b) => {
+      const ta = Date.parse(a.timestamp)
+      const tb = Date.parse(b.timestamp)
+      return ta === tb ? a.id.localeCompare(b.id) : ta - tb
     })
-
-    return allMessages
   }
 
-  // ----------- Asset Downloads -----------
-
-  async downloadAttachment(url: string): Promise<{ buffer: Buffer; contentType: string }> {
-    const response = await this.rateLimiter.execute('assets:download', async () => {
-      return fetch(url, {
-        headers: { 'User-Agent': 'ForoDownloader/1.0' }
-      })
-    })
-
-    if (!response.ok) {
-      throw new DiscordApiError(
-        `Failed to download attachment: ${response.status}`,
-        response.status,
-        undefined,
-        response.status >= 500
-      )
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer())
-    const contentType = response.headers.get('content-type') || 'application/octet-stream'
-    return { buffer, contentType }
-  }
+  // ----------- Recursos -----------
 
   getGuildIconUrl(guildId: string, hash: string | null, size = 128): string | null {
     if (!hash) return null
@@ -365,11 +325,19 @@ export class DiscordClient {
   }
 
   getUserAvatarUrl(userId: string, hash: string | null, size = 128): string | null {
-    if (!hash) return ENDPOINTS.DEFAULT_AVATAR(parseInt(userId) % 5)
-    return `${ENDPOINTS.USER_AVATAR(userId, hash)}?size=${size}`
+    if (hash) return `${ENDPOINTS.USER_AVATAR(userId, hash)}?size=${size}`
+    // El índice del avatar legacy se deriva de la marca de tiempo del snowflake
+    // (bits 22..), no del id completo: parseInt() perdería precisión con ids de 19 dígitos.
+    let index = 0
+    try {
+      index = Number((BigInt(userId) >> 22n) % 6n)
+    } catch {
+      index = 0
+    }
+    return ENDPOINTS.DEFAULT_AVATAR(index)
   }
 
-  // ----------- Internal -----------
+  // ----------- Interno -----------
 
   private async request<T>(
     method: string,
@@ -381,8 +349,9 @@ export class DiscordClient {
     const maxRetries = 3
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      let response: Response
       try {
-        const response = await this.rateLimiter.execute(route, async () => {
+        response = await this.rateLimiter.execute(route, async () => {
           const headers: Record<string, string> = {
             'Authorization': this.token,
             'Content-Type': 'application/json',
@@ -394,55 +363,67 @@ export class DiscordClient {
 
           return fetch(url, fetchOptions)
         })
-
-        if (response.status === 401) {
-          throw new DiscordApiError('Invalid or expired token', 401, undefined, false)
-        }
-
-        if (response.status === 403) {
-          throw new DiscordApiError('Access denied. You may not have permission to view this resource.', 403, undefined, false)
-        }
-
-        if (response.status === 404) {
-          throw new DiscordApiError('Resource not found', 404, undefined, false)
-        }
-
-        if (response.status >= 500) {
-          throw new DiscordApiError(`Discord server error: ${response.status}`, response.status, undefined, true)
-        }
-
-        if (!response.ok) {
-          const errorBody = await response.text()
-          throw new DiscordApiError(`HTTP ${response.status}: ${errorBody}`, response.status)
-        }
-
-        return await response.json() as T
       } catch (error) {
+        // Fallo de red o rechazo de la cola: se reintenta salvo que sea fatal explícito.
         lastError = error as Error
-
-        if (error instanceof DiscordApiError && !error.retryable) {
-          throw error
-        }
-
-        // Exponential backoff for retryable errors
-        if (attempt < maxRetries - 1) {
-          const backoff = Math.pow(2, attempt) * 1000 + Math.random() * 1000
-          await new Promise(resolve => setTimeout(resolve, backoff))
-        }
+        if (error instanceof DiscordApiError && !error.retryable) throw error
+        if (attempt < maxRetries - 1) await this.sleep(this.retryDelay(null, attempt))
+        continue
       }
+
+      if (response.status === 401) {
+        throw new DiscordApiError('Invalid or expired token', 401, undefined, false)
+      }
+
+      if (response.status === 403) {
+        throw new DiscordApiError('Access denied. You may not have permission to view this resource.', 403, undefined, false)
+      }
+
+      if (response.status === 404) {
+        throw new DiscordApiError('Resource not found', 404, undefined, false)
+      }
+
+      // 429: el limitador ya reintentó; llegar aquí significa que se rindió.
+      if (response.status === 429) {
+        throw new DiscordApiError('Rate limited by Discord', 429, undefined, false)
+      }
+
+      if (response.status >= 500) {
+        lastError = new DiscordApiError(`Discord server error: ${response.status}`, response.status, undefined, true)
+        if (attempt < maxRetries - 1) await this.sleep(this.retryDelay(response, attempt))
+        continue
+      }
+
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new DiscordApiError(`HTTP ${response.status}: ${errorBody}`, response.status)
+      }
+
+      return await response.json() as T
     }
 
     throw lastError || new Error('Unknown error after retries')
   }
 
-  clearCaches(): void {
-    this.userCache.clear()
-    this.roleCache.clear()
-    this.channelCache.clear()
+  /** Se prefiere la cabecera Retry-After de Discord; si no, se usa backoff exponencial acotado. */
+  private retryDelay(response: Response | null, attempt: number): number {
+    const header = response?.headers.get('retry-after')
+    if (header) {
+      const seconds = Number(header)
+      if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000) + 250
+      const date = Date.parse(header)
+      if (!Number.isNaN(date)) return Math.max(0, date - Date.now()) + 250
+    }
+    return Math.min(30000, Math.pow(2, attempt) * 1000 + Math.random() * 500)
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)))
   }
 
   destroy(): void {
     this.rateLimiter.clearQueue()
-    this.clearCaches()
+    this.userCache.clear()
+    this.channelCache.clear()
   }
 }

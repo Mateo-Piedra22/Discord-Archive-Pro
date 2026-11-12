@@ -1,880 +1,1173 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Folder, FolderOpen, FileText, Image as FileImage, BookOpen, FileJson, Globe, File, RefreshCw, ExternalLink, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCw, Download, Maximize2, Search, X, Plus, Minus } from 'lucide-react'
-import { useDownloadStore } from '../stores/downloadStore'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-// @ts-ignore - Support for raw HTML in markdown
-import rehypeRaw from 'rehype-raw'
-import DOMPurify from 'dompurify'
-import ePub, { Rendition } from 'epubjs'
-import * as pdfjsLib from 'pdfjs-dist'
+// ============================================================
+// Archivo — La carpeta de salida se entiende sola.
+// Al entrar se detectan las colecciones (carpetas con post.md,
+// thread.md o index.md) y se muestran como tarjetas. Dentro de
+// una colección: documento, galería y árbol de archivos.
+// ============================================================
 
-// @ts-ignore - Syntax Highlighting for code views
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import {
+  Archive,
+  BookOpen,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Expand,
+  ExternalLink,
+  File,
+  FileAudio,
+  FileImage,
+  FileJson,
+  FileText,
+  FileVideo,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Globe,
+  Minus,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  TriangleAlert
+} from 'lucide-react'
+import ePub, { Rendition, Location } from 'epubjs'// @ts-ignore - Resaltado de sintaxis para las vistas de código
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-// @ts-ignore - VSCode Dark theme for professional look
+// @ts-ignore - Tema oscuro de VSCode para un aspecto profesional
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-// @ts-ignore - JSON Tree visualizer
-import ReactJson from 'react-json-view'
+import { useDownloadStore } from '../stores/downloadStore'
+import { useUiStore } from '../stores/uiStore'
+import type { ArchiveFileEntry } from '../../shared/api'
+import MediaLightbox from './message/MediaLightbox'
+import Colecciones, {
+  EXT_IMAGEN,
+  detectarColecciones,
+  etiquetaCanal,
+  formatearBytes,
+  normalizar,
+  textoFecha
+} from './archive/Colecciones'
+import type { Coleccion } from './archive/Colecciones'
+import Galeria from './archive/Galeria'
+import VisorDocumento from './archive/VisorDocumento'
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+const ICONO_TRAZO = 1.8
 
-interface FileEntry {
-  name: string
-  path: string
-  type: 'dir' | 'file'
-  size?: number
-  children?: FileEntry[]
+const EXT_VIDEO = ['mp4', 'webm', 'mov', 'mkv', 'm4v']
+const EXT_AUDIO = ['mp3', 'ogg', 'wav', 'm4a', 'flac', 'opus']
+const EXT_TEXTO = ['md', 'txt', 'json', 'css', 'log', 'xml', 'csv', 'js', 'ts', 'yml', 'yaml', 'sql']
+const EXT_BINARIO = ['zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'iso', 'exe', 'dmg', 'apk']
+
+const LENGUAJE_POR_EXT: Record<string, string> = {
+  md: 'markdown',
+  html: 'markup',
+  css: 'css',
+  json: 'json',
+  js: 'javascript',
+  ts: 'typescript',
+  xml: 'markup',
+  log: 'bash',
+  txt: 'text',
+  csv: 'csv',
+  sql: 'sql',
+  yml: 'yaml',
+  yaml: 'yaml'
 }
 
-const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'ico']
+const ESTILO_CODIGO: CSSProperties = {
+  margin: 0,
+  padding: '16px 20px',
+  background: 'transparent',
+  fontSize: 'var(--text-md)',
+  lineHeight: 1.6,
+  fontFamily: 'var(--font-mono)'
+}
 
-/**
- * Utility to map file extensions to Prism highligher languages
- */
-const getLanguageFromExt = (ext: string): string => {
-  const map: Record<string, string> = {
-    'md': 'markdown',
-    'html': 'markup',
-    'css': 'css',
-    'json': 'json',
-    'js': 'javascript',
-    'ts': 'typescript',
-    'jsx': 'jsx',
-    'tsx': 'tsx',
-    'xml': 'markup',
-    'log': 'bash',
-    'txt': 'text',
-    'csv': 'csv',
-    'sql': 'sql',
-    'yml': 'yaml',
-    'yaml': 'yaml'
-  };
-  return map[ext.toLowerCase()] || 'text';
+const TEMAS_EPUB: Record<'light' | 'sepia' | 'dark', { etiqueta: string; body: { background: string; color: string } }> = {
+  light: { etiqueta: 'Claro', body: { background: '#ffffff', color: '#1a1a1a' } },
+  sepia: { etiqueta: 'Sepia', body: { background: '#f4ecd8', color: '#5b4636' } },
+  dark: { etiqueta: 'Oscuro', body: { background: '#12151b', color: '#e8e9ec' } }
+}
+
+type Pestana = 'documento' | 'galeria' | 'archivos'
+type TipoAmpliado = 'imagen' | 'video'
+
+function extensionDe(nombre: string): string {
+  const punto = nombre.lastIndexOf('.')
+  return punto > 0 ? nombre.slice(punto + 1).toLowerCase() : ''
+}
+
+/** Filtra el árbol por nombre, conservando las carpetas con coincidencias. */
+function filtrarArbol(entradas: ArchiveFileEntry[], consulta: string): ArchiveFileEntry[] {
+  if (!consulta) return entradas
+  const aguja = normalizar(consulta)
+
+  return entradas.reduce<ArchiveFileEntry[]>((salida, entrada) => {
+    if (normalizar(entrada.name).includes(aguja)) {
+      salida.push(entrada)
+      return salida
+    }
+    if (entrada.type === 'dir') {
+      const hijos = filtrarArbol(entrada.children ?? [], consulta)
+      if (hijos.length > 0) salida.push({ ...entrada, children: hijos })
+    }
+    return salida
+  }, [])
+}
+
+/** Envuelve en `<mark>` cada coincidencia del nombre, sin distinguir acentos. */
+function resaltar(nombre: string, consulta: string): ReactNode {
+  const aguja = normalizar(consulta)
+  if (!aguja) return nombre
+
+  const objetivo = normalizar(nombre)
+  const partes: ReactNode[] = []
+  let desde = 0
+  let posicion = objetivo.indexOf(aguja)
+
+  while (posicion >= 0) {
+    if (posicion > desde) partes.push(nombre.slice(desde, posicion))
+    partes.push(<mark key={`${posicion}-${nombre}`}>{nombre.slice(posicion, posicion + aguja.length)}</mark>)
+    desde = posicion + aguja.length
+    posicion = objetivo.indexOf(aguja, desde)
+  }
+
+  if (partes.length === 0) return nombre
+  if (desde < nombre.length) partes.push(nombre.slice(desde))
+  return partes
+}
+
+/** La navegación entre vistas la resuelve el armazón (App) escuchando este evento. */
+function irA(vista: 'ajustes' | 'explorar'): void {
+  window.dispatchEvent(new CustomEvent('dap:navigate', { detail: vista }))
+}
+
+interface ArchivoAbierto {
+  path: string
+  name: string
+  tipo: string
+  contenido: string
+  truncado: boolean
+  bytes: number
+  error?: boolean
+}
+
+interface Documento {
+  contenido: string
+  ruta: string
+  truncado: boolean
 }
 
 export default function ArchiveViewer() {
-  const { outputDir, openOutputFolder } = useDownloadStore()
-  const [tree, setTree] = useState<FileEntry[]>([])
-  const [loading, setLoading] = useState(false)
-  const [selectedFile, setSelectedFile] = useState<{ path: string; content: string; type: string; name: string } | null>(null)
-  const [imagePreview, setImagePreview] = useState<{ path: string; name: string } | null>(null)
-  const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [treeWidth, setTreeWidth] = useState(250)
-  const [treeVisible, setTreeVisible] = useState(true)
-  const [imageZoom, setImageZoom] = useState(1)
-  const [imageRotate, setImageRotate] = useState(0)
-  const dragging = useRef(false)
+  const outputDir = useDownloadStore((estado) => estado.outputDir)
+  const pickDirectory = useDownloadStore((estado) => estado.pickDirectory)
+  const openOutputFolder = useDownloadStore((estado) => estado.openOutputFolder)
+  const archivoPedido = useUiStore((estado) => estado.archivoInicial)
+  const consumirArchivoInicial = useUiStore((estado) => estado.consumirArchivoInicial)
 
-  // Flatten tree for gallery navigation
-  const flatFiles = useMemo(() => {
-    const files: FileEntry[] = []
-    const walk = (nodes: FileEntry[]) => {
-      nodes.forEach(node => {
-        if (node.type === 'file') files.push(node)
-        if (node.children) walk(node.children)
-      })
-    }
-    walk(tree)
-    return files
-  }, [tree])
+  const [arbol, setArbol] = useState<ArchiveFileEntry[]>([])
+  const [colecciones, setColecciones] = useState<Coleccion[]>([])
+  const [cargando, setCargando] = useState(true)
+  const [rutaActiva, setRutaActiva] = useState<string | null>(null)
+  const [pestana, setPestana] = useState<Pestana>('documento')
+  const [busqueda, setBusqueda] = useState('')
+  const [busquedaArbol, setBusquedaArbol] = useState('')
+  const [documento, setDocumento] = useState<Documento | null>(null)
+  const [leyendoDoc, setLeyendoDoc] = useState(false)
+  const [archivo, setArchivo] = useState<ArchivoAbierto | null>(null)
+  const [leyendoArchivo, setLeyendoArchivo] = useState(false)
+  const [ampliado, setAmpliado] = useState<{ url: string; tipo: TipoAmpliado } | null>(null)
+  const [anchoArbol, setAnchoArbol] = useState(268)
+  const [rutaCopiada, setRutaCopiada] = useState(false)
 
-  const imageFiles = useMemo(() =>
-    flatFiles.filter(f => IMAGE_EXTS.includes(f.name.split('.').pop()?.toLowerCase() || '')),
-    [flatFiles]
+  const arrastreRef = useRef<AbortController | null>(null)
+  const completadasRef = useRef(0)
+  const copiaRef = useRef<number | null>(null)
+
+  const coleccion = useMemo(
+    () => colecciones.find((item) => item.ruta === rutaActiva) ?? null,
+    [colecciones, rutaActiva]
   )
 
-  const onMouseDownSplitter = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragging.current = true
-    const startX = e.clientX
-    const startW = treeWidth
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return
-      const newW = Math.max(140, Math.min(500, startW + ev.clientX - startX))
-      setTreeWidth(newW)
-    }
-    const onUp = () => {
-      dragging.current = false
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [treeWidth])
+  const coleccionesFiltradas = useMemo(() => {
+    if (!busqueda.trim()) return colecciones
+    const aguja = normalizar(busqueda)
+    return colecciones.filter((item) =>
+      normalizar(`${item.titulo} ${item.canal} ${item.servidor}`).includes(aguja)
+    )
+  }, [colecciones, busqueda])
 
-  const loadTree = async () => {
-    if (!outputDir) return
-    setLoading(true)
+  const totalBytes = useMemo(
+    () => colecciones.reduce((suma, item) => suma + item.bytes, 0),
+    [colecciones]
+  )
+
+  // Aborta el arrastre del divisor si el componente se desmonta a mitad de gesto.
+  useEffect(() => () => arrastreRef.current?.abort(), [])
+
+  // Limpia el aviso de «Copiada» si la vista se cierra antes de tiempo.
+  useEffect(() => () => {
+    if (copiaRef.current !== null) window.clearTimeout(copiaRef.current)
+  }, [])
+
+  const onDivisorAbajo = useCallback((evento: ReactMouseEvent<HTMLDivElement>) => {
+    evento.preventDefault()
+    arrastreRef.current?.abort()
+    const controlador = new AbortController()
+    arrastreRef.current = controlador
+    const { signal } = controlador
+    const inicioX = evento.clientX
+    const inicioAncho = anchoArbol
+
+    window.addEventListener('mousemove', (movimiento) => {
+      setAnchoArbol(Math.max(180, Math.min(460, inicioAncho + movimiento.clientX - inicioX)))
+    }, { signal })
+    window.addEventListener('mouseup', () => controlador.abort(), { signal })
+  }, [anchoArbol])
+
+  const cargar = useCallback(async () => {
+    if (!outputDir) {
+      setArbol([])
+      setColecciones([])
+      setCargando(false)
+      return
+    }
+
+    setCargando(true)
     try {
-      const entries = await window.api.archive.scanDirectory(outputDir)
-      setTree(entries || [])
-    } catch (err) {
-      console.error('Failed to scan archive:', err)
-      setTree([])
+      const entradas = await window.api.archive.scanDirectory(outputDir)
+      const lista = entradas ?? []
+      setArbol(lista)
+      setColecciones(detectarColecciones(lista, outputDir))
+    } catch (error) {
+      console.error('No se pudo leer el archivo:', error)
+      setArbol([])
+      setColecciones([])
     } finally {
-      setLoading(false)
+      setCargando(false)
     }
-  }
-
-  useEffect(() => {
-    loadTree()
   }, [outputDir])
 
-  const handleFileClick = async (entry: FileEntry) => {
-    if (entry.type === 'dir') return
+  useEffect(() => {
+    void cargar()
+  }, [cargar])
 
-    const ext = entry.name.split('.').pop()?.toLowerCase() || ''
+  // Refresca al terminar una descarga, agrupando ráfagas.
+  useEffect(() => {
+    let temporizador: ReturnType<typeof setTimeout> | null = null
 
-    if (IMAGE_EXTS.includes(ext)) {
-      setImagePreview({ path: entry.path, name: entry.name })
-      setSelectedFile(null)
-      setImageZoom(1)
-      setImageRotate(0)
-    } else if (['md', 'txt', 'json', 'html', 'css', 'log', 'pdf', 'epub', 'zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'csv', 'xml', 'iso'].includes(ext)) {
-      try {
-        if (['pdf', 'epub', 'zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'csv', 'xml', 'iso'].includes(ext)) {
-          setSelectedFile({ path: entry.path, content: '', type: ext, name: entry.name })
-          setImagePreview(null)
-        } else {
-          const content = await window.api.archive.readFile(entry.path)
-          setSelectedFile({ path: entry.path, content, type: ext, name: entry.name })
-          setImagePreview(null)
-        }
-      } catch {
-        setSelectedFile({ path: entry.path, content: 'Error al leer archivo', type: 'txt', name: entry.name })
-      }
-    } else {
-      window.api.settings.openFolder(entry.path)
+    const desuscribir = window.api.download.onQueueUpdated((cola) => {
+      const terminadas = cola.filter((tarea) => tarea.status === 'done').length
+      if (terminadas <= completadasRef.current) return
+      completadasRef.current = terminadas
+      if (temporizador) clearTimeout(temporizador)
+      temporizador = setTimeout(() => { void cargar() }, 800)
+    })
+
+    return () => {
+      desuscribir()
+      if (temporizador) clearTimeout(temporizador)
     }
-  }
+  }, [cargar])
 
-  const navigateGallery = (direction: number) => {
-    if (!imagePreview) return
-    const currentIndex = imageFiles.findIndex(f => f.path === imagePreview.path)
-    const nextIndex = (currentIndex + direction + imageFiles.length) % imageFiles.length
-    const nextFile = imageFiles[nextIndex]
-    if (nextFile) {
-      setImagePreview({ path: nextFile.path, name: nextFile.name })
-      setImageZoom(1)
-      setImageRotate(0)
+  // Documento principal de la colección abierta: se lee solo al abrirla.
+  useEffect(() => {
+    const principal = coleccion?.principal
+    setDocumento(null)
+    setArchivo(null)
+    if (!principal) return
+
+    let vigente = true
+    setLeyendoDoc(true)
+
+    window.api.archive.readFile(principal.path)
+      .then((resultado) => {
+        if (!vigente) return
+        setDocumento({ contenido: resultado.content, ruta: principal.path, truncado: resultado.truncated })
+      })
+      .catch(() => {
+        if (vigente) setDocumento({ contenido: '', ruta: principal.path, truncado: false })
+      })
+      .finally(() => {
+        if (vigente) setLeyendoDoc(false)
+      })
+
+    return () => { vigente = false }
+  }, [coleccion?.ruta, coleccion?.principal])
+
+  const abrirArchivo = useCallback(async (entrada: ArchiveFileEntry) => {
+    if (entrada.type === 'dir') return
+    const ext = extensionDe(entrada.name)
+
+    if (!EXT_TEXTO.includes(ext)) {
+      setArchivo({
+        path: entrada.path,
+        name: entrada.name,
+        tipo: ext,
+        contenido: '',
+        truncado: false,
+        bytes: entrada.size ?? 0
+      })
+      return
     }
-  }
 
-  const filterTree = (nodes: FileEntry[]): FileEntry[] => {
-    if (!searchQuery) return nodes
-    const q = searchQuery.toLowerCase()
+    setLeyendoArchivo(true)
+    try {
+      const resultado = await window.api.archive.readFile(entrada.path)
+      setArchivo({
+        path: entrada.path,
+        name: entrada.name,
+        tipo: ext,
+        contenido: resultado.content,
+        truncado: resultado.truncated,
+        bytes: resultado.size
+      })
+    } catch {
+      setArchivo({
+        path: entrada.path,
+        name: entrada.name,
+        tipo: ext,
+        contenido: '',
+        truncado: false,
+        bytes: entrada.size ?? 0,
+        error: true
+      })
+    } finally {
+      setLeyendoArchivo(false)
+    }
+  }, [])
 
-    return nodes.map(node => {
-      if (node.name.toLowerCase().includes(q)) return node
-      if (node.type === 'dir' && node.children) {
-        const filteredChildren = filterTree(node.children)
-        if (filteredChildren.length > 0) {
-          return { ...node, children: filteredChildren }
-        }
-      }
-      return null
-    }).filter(Boolean) as FileEntry[]
-  }
+  // Al entrar en «Archivos» se abre el documento principal: el panel nunca arranca vacío.
+  useEffect(() => {
+    if (pestana !== 'archivos' || archivo || leyendoArchivo) return
+    if (!coleccion?.principal) return
+    void abrirArchivo(coleccion.principal)
+  }, [pestana, archivo, leyendoArchivo, coleccion, abrirArchivo])
 
-  const renderBreadcrumbs = () => {
-    const currentPath = imagePreview?.path || selectedFile?.path
-    if (!currentPath || !outputDir) return null
+  const abrirColeccion = useCallback((item: Coleccion) => {
+    setRutaActiva(item.ruta)
+    setPestana('documento')
+    setBusquedaArbol('')
+    // Se limpia antes de leer: evita mostrar el documento de la colección anterior.
+    setDocumento(null)
+    setArchivo(null)
+    setLeyendoDoc(Boolean(item.principal))
+  }, [])
 
-    const relative = currentPath.replace(outputDir, '').replace(/\\/g, '/')
-    const parts = relative.split('/').filter(Boolean)
+  const volver = useCallback(() => {
+    setRutaActiva(null)
+    setDocumento(null)
+    setArchivo(null)
+    setBusquedaArbol('')
+  }, [])
 
-    return (
-      <div className="breadcrumbs">
-        <Folder size={12} style={{ marginRight: 6, opacity: 0.5 }} />
-        {parts.map((part, i) => (
-          <React.Fragment key={part}>
-            <span className="breadcrumb__item">{part}</span>
-            {i < parts.length - 1 && <span className="breadcrumb__sep">/</span>}
-          </React.Fragment>
-        ))}
-      </div>
+  // La búsqueda global puede pedir un archivo concreto: se abre la colección
+  // que lo contiene y se deja el documento listo, sin salir de la app.
+  useEffect(() => {
+    if (!archivoPedido || colecciones.length === 0) return
+    const objetivo = archivoPedido.replace(/\\/g, '/').toLowerCase()
+    const item = colecciones.find((c) =>
+      objetivo.startsWith(c.ruta.replace(/\\/g, '/').toLowerCase())
     )
-  }
+    if (item) abrirColeccion(item)
+    consumirArchivoInicial()
+  }, [archivoPedido, colecciones, abrirColeccion, consumirArchivoInicial])
 
+  const copiarRuta = useCallback(async () => {
+    if (!coleccion) return
+    try {
+      await navigator.clipboard.writeText(coleccion.ruta)
+      setRutaCopiada(true)
+      if (copiaRef.current !== null) window.clearTimeout(copiaRef.current)
+      copiaRef.current = window.setTimeout(() => setRutaCopiada(false), 1600)
+    } catch {
+      // Sin permiso de portapapeles: no hay nada que avisar.
+    }
+  }, [coleccion])
+
+  const ampliar = useCallback((url: string, tipo: TipoAmpliado) => {
+    setAmpliado({ url, tipo })
+  }, [])
+
+  // ---------- Estado sin carpeta de salida ----------
   if (!outputDir) {
     return (
-      <div className="panel full-center">
-        <div className="empty-state">
-          <div className="empty-state__icon"><Folder size={48} opacity={0.2} /></div>
-          <h3>Sin Carpeta de Origen</h3>
-          <p>Ve a Configuración para seleccionar la carpeta donde se descargan tus archivos.</p>
+      <>
+        <header className="workspace__header">
+          <div className="workspace__titles">
+            <h1 className="workspace__title">Archivo</h1>
+            <div className="workspace__subtitle">Sin carpeta de salida</div>
+          </div>
+        </header>
+
+        <div className="workspace__body">
+          <div className="view-pad">
+            <div className="empty">
+              <div className="empty__icon">
+                <FolderPlus size={20} strokeWidth={ICONO_TRAZO} />
+              </div>
+              <div className="empty__title">Elige dónde vive tu archivo</div>
+              <div className="empty__text">
+                Estrato guarda cada publicación descargada en una carpeta con su markdown, sus
+                imágenes y sus respuestas. Indica una carpeta y aquí aparecerán todas las
+                colecciones detectadas, sin abrir nada por tu cuenta.
+              </div>
+              <div className="row">
+                <button className="btn btn--primary btn--sm" onClick={() => void pickDirectory()}>
+                  <FolderOpen size={14} strokeWidth={ICONO_TRAZO} />
+                  Elegir carpeta
+                </button>
+                <button className="btn btn--ghost btn--sm" onClick={() => irA('ajustes')}>
+                  <Settings2 size={14} strokeWidth={ICONO_TRAZO} />
+                  Ir a Ajustes
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </>
     )
   }
 
-  return (
-    <div className="archive-view">
-      <div className="toolbar" style={{ 
-        background: 'rgba(255, 255, 255, 0.02)', 
-        backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-        padding: '10px 16px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-      }}>
-        <button
-          className="btn btn--ghost btn--xs"
-          onClick={() => setTreeVisible(v => !v)}
-          title={treeVisible ? 'Ocultar Explorador' : 'Mostrar Explorador'}
-        >
-          {treeVisible ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-        </button>
-        <div className="spacer--h" style={{ width: 12 }} />
-        {renderBreadcrumbs()}
-        <div className="spacer" />
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn btn--ghost btn--xs" onClick={loadTree} title="Actualizar"><RefreshCw size={14} /></button>
-          <button className="btn btn--ghost btn--xs" onClick={openOutputFolder} title="Abrir carpeta"><ExternalLink size={14} /></button>
-        </div>
-      </div>
+  // ---------- Colección abierta ----------
+  if (coleccion) {
+    const canal = etiquetaCanal(coleccion.canal)
+    const hijos = coleccion.nodo.children ?? []
+    const arbolVisible = filtrarArbol(hijos, busquedaArbol)
 
-      <div className="archive-view__body" style={{ position: 'relative' }}>
-        {treeVisible && (
-          <div className="archive-view__tree" style={{ width: treeWidth }}>
-            <div className="tree-search">
-              <Search size={13} className="tree-search__icon" />
-              <input
-                className="tree-search__input"
-                placeholder="Buscar archivos..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            <div className="tree-container">
-              {loading ? (
-                <div className="panel__pad">
-                  {[1, 2, 3, 4, 5].map(i => <div key={i} className="skeleton skeleton--row" style={{ marginBottom: 8 }} />)}
-                </div>
-              ) : filterTree(tree).length === 0 ? (
-                <div className="empty-state--small" style={{
-                  padding: '24px 16px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  background: 'rgba(255,255,255,0.02)',
-                  borderRadius: '12px',
-                  margin: '8px'
-                }}>
-                  <div style={{ opacity: 0.3, marginBottom: 12 }}>
-                    <Search size={32} strokeWidth={1.5} />
-                  </div>
-                  <p style={{ 
-                    fontSize: '11px', 
-                    fontWeight: 500, 
-                    color: 'var(--text-3)',
-                    textAlign: 'center'
-                  }}>
-                    {searchQuery ? 'No se encontraron resultados para tu búsqueda' : 'No hay archivos en esta carpeta todavía'}
-                  </p>
-                </div>
-              ) : (
-                <TreeNode entries={filterTree(tree)} depth={0} onFileClick={handleFileClick} activePath={imagePreview?.path || selectedFile?.path} />
+    return (
+      <>
+        <header className="workspace__header">
+          <div className="workspace__titles">
+            <div className="visor__migas">
+              <button
+                className="btn btn--ghost btn--icon btn--sm"
+                onClick={volver}
+                title="Volver a las colecciones"
+                aria-label="Volver a las colecciones"
+              >
+                <ChevronLeft size={16} strokeWidth={ICONO_TRAZO} />
+              </button>
+              <span className="dim">Archivo</span>
+              <span className="dim">/</span>
+              {coleccion.servidor && (
+                <>
+                  <span className="muted truncate">{coleccion.servidor}</span>
+                  <span className="dim">/</span>
+                </>
               )}
+              <span className="truncate">{canal || 'Sin canal'}</span>
+            </div>
+
+            <h1 className="workspace__title">{coleccion.titulo}</h1>
+            <div className="workspace__subtitle">
+              {textoFecha(coleccion.fecha)} · {coleccion.mensajes} mensajes ·{' '}
+              {coleccion.imagenes.length} imágenes · {formatearBytes(coleccion.bytes)}
             </div>
           </div>
-        )}
 
-        {treeVisible && (
-          <div onMouseDown={onMouseDownSplitter} className="tree-splitter" />
-        )}
+          <div className="workspace__actions">
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => void window.api.settings.openFolder(coleccion.ruta)}
+              title="Abrir la carpeta en el sistema"
+            >
+              <FolderOpen size={14} strokeWidth={ICONO_TRAZO} />
+              Abrir carpeta
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => irA('explorar')}
+              title="Volver a descargar esta publicación"
+            >
+              <RefreshCw size={14} strokeWidth={ICONO_TRAZO} />
+              Exportar de nuevo
+            </button>
+            <button className="btn btn--ghost btn--sm" onClick={() => void copiarRuta()} title={coleccion.ruta}>
+              {rutaCopiada
+                ? <Check size={14} strokeWidth={ICONO_TRAZO} />
+                : <Copy size={14} strokeWidth={ICONO_TRAZO} />}
+              {rutaCopiada ? 'Ruta copiada' : 'Copiar ruta'}
+            </button>
+          </div>
+        </header>
 
-        <div className="archive-view__preview">
-          {imagePreview ? (
-            <div className="preview-image-container">
-              <div className="viewer-controls viewer-controls--floating">
-                <div className="viewer-controls__group">
-                  <button className="btn btn--ghost btn--xs" onClick={() => navigateGallery(-1)} title="Anterior"><ChevronLeft size={16} /></button>
-                  <span className="viewer-info">{imagePreview.name}</span>
-                  <button className="btn btn--ghost btn--xs" onClick={() => navigateGallery(1)} title="Siguiente"><ChevronRight size={16} /></button>
+        <div className="workspace__body workspace__body--flush">
+          <div className="visor">
+            <div className="visor__barra">
+              <button
+                className={`btn btn--sm${pestana === 'documento' ? '' : ' btn--ghost'}`}
+                onClick={() => setPestana('documento')}
+              >
+                Documento
+              </button>
+              <button
+                className={`btn btn--sm${pestana === 'galeria' ? '' : ' btn--ghost'}`}
+                onClick={() => setPestana('galeria')}
+              >
+                Galería
+                <span className="dim mono">{coleccion.imagenes.length}</span>
+              </button>
+              <button
+                className={`btn btn--sm${pestana === 'archivos' ? '' : ' btn--ghost'}`}
+                onClick={() => setPestana('archivos')}
+              >
+                Archivos
+                <span className="dim mono">{hijos.length}</span>
+              </button>
+
+              <span className="spacer" />
+
+              {documento?.truncado && pestana === 'documento' && (
+                <span className="badge badge--warn" title="Vista parcial del documento">
+                  <TriangleAlert size={11} strokeWidth={2} />
+                  Truncado
+                </span>
+              )}
+            </div>
+
+            {pestana === 'documento' && (
+              leyendoDoc ? (
+                <div className="split__body">
+                  <div className="col">
+                    <div className="skeleton skeleton--row" />
+                    <div className="skeleton skeleton--row" />
+                    <div className="skeleton skeleton--row" />
+                  </div>
                 </div>
-                <div className="spacer--h" />
-                <div className="viewer-controls__group">
-                  <button className="btn btn--ghost btn--xs" onClick={() => setImageZoom(z => z + 0.2)}><ZoomIn size={16} /></button>
-                  <button className="btn btn--ghost btn--xs" onClick={() => setImageZoom(1)} title="Reset"><Maximize2 size={16} /></button>
-                  <button className="btn btn--ghost btn--xs" onClick={() => setImageZoom(z => Math.max(0.1, z - 0.2))}><ZoomOut size={16} /></button>
-                  <button className="btn btn--ghost btn--xs" onClick={() => setImageRotate(r => r + 90)}><RotateCw size={16} /></button>
-                  <div className="spacer--h" style={{ width: 8 }} />
-                  <button className="btn btn--ghost btn--xs" style={{ background: 'var(--red)', color: 'white' }} onClick={() => setImagePreview(null)} title="Cerrar"><X size={16} /></button>
+              ) : documento && documento.contenido ? (
+                <VisorDocumento
+                  contenido={documento.contenido}
+                  ruta={documento.ruta}
+                  onAmpliar={(url) => ampliar(url, 'imagen')}
+                />
+              ) : (
+                <div className="empty">
+                  <div className="empty__icon">
+                    <FileText size={20} strokeWidth={ICONO_TRAZO} />
+                  </div>
+                  <div className="empty__title">Esta colección no tiene documento</div>
+                  <div className="empty__text">
+                    No se encontró post.md, thread.md ni index.md dentro de la carpeta. Revisa la
+                    pestaña Archivos para ver qué se descargó.
+                  </div>
+                  <button className="btn btn--sm" onClick={() => setPestana('archivos')}>
+                    <FolderOpen size={14} strokeWidth={ICONO_TRAZO} />
+                    Ver archivos
+                  </button>
                 </div>
-              </div>
-              <div className="image-canvas" style={{ overflow: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                <img
-                  src={`file://${imagePreview.path}`}
-                  alt=""
-                  style={{
-                    transform: `scale(${imageZoom}) rotate(${imageRotate}deg)`,
-                    transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                    maxWidth: imageZoom === 1 ? '90%' : 'none',
-                    maxHeight: imageZoom === 1 ? '90%' : 'none',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-                    borderRadius: 4
+              )
+            )}
+
+            {pestana === 'galeria' && (
+              coleccion.imagenes.length > 0 ? (
+                <Galeria
+                  imagenes={coleccion.imagenes}
+                  onAbrir={(indice) => {
+                    const imagen = coleccion.imagenes[indice]
+                    if (imagen) ampliar(window.api.archive.toUrl(imagen.path), 'imagen')
                   }}
                 />
-              </div>
-            </div>
-          ) : selectedFile ? (
-            <div className="preview-content-wrapper">
-              <div className="preview-header">
-                <div className="preview-header__title">
-                  {selectedFile.type === 'pdf' ? <BookOpen size={14} color="var(--red)" /> :
-                    selectedFile.type === 'epub' ? <BookOpen size={14} color="var(--amber)" /> :
-                      selectedFile.type === 'json' ? <FileJson size={14} color="var(--text-2)" /> :
-                        <FileText size={14} color="var(--text-1)" />}
-                  <span>{selectedFile.name}</span>
+              ) : (
+                <div className="empty">
+                  <div className="empty__icon">
+                    <FileImage size={20} strokeWidth={ICONO_TRAZO} />
+                  </div>
+                  <div className="empty__title">Sin imágenes</div>
+                  <div className="empty__text">
+                    Esta publicación no descargó archivos de imagen. Puedes repetir la descarga
+                    incluyendo imágenes desde Explorar.
+                  </div>
                 </div>
-                <div className="preview-header__actions">
-                  {['md', 'html', 'json'].includes(selectedFile.type) && (
-                    <div className="view-toggle">
-                      <button className={`view-toggle__btn ${viewMode === 'rendered' ? 'view-toggle__btn--active' : ''}`} onClick={() => setViewMode('rendered')}>Visualizar</button>
-                      <button className={`view-toggle__btn ${viewMode === 'source' ? 'view-toggle__btn--active' : ''}`} onClick={() => setViewMode('source')}>Código</button>
+              )
+            )}
+
+            {pestana === 'archivos' && (
+              <div className="split">
+                <aside className="split__side" style={{ width: anchoArbol }}>
+                  <div className="split__head">
+                    <div className="search spacer">
+                      <Search size={14} strokeWidth={ICONO_TRAZO} className="search__icon" />
+                      <input
+                        className="input input--search"
+                        type="search"
+                        placeholder="Filtrar archivos"
+                        value={busquedaArbol}
+                        onChange={(evento) => setBusquedaArbol(evento.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {arbolVisible.length > 0 ? (
+                    <div className="arbol">
+                      <Arbol
+                        entradas={arbolVisible}
+                        activo={archivo?.path ?? null}
+                        consulta={busquedaArbol}
+                        onAbrir={(entrada) => void abrirArchivo(entrada)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="empty">
+                      <Search size={16} strokeWidth={ICONO_TRAZO} className="dim" />
+                      <span className="muted">Sin coincidencias</span>
                     </div>
                   )}
-                  <button className="btn btn--ghost btn--xs" onClick={() => window.api.settings.revealFolder(selectedFile.path)}><ExternalLink size={14} /></button>
+                </aside>
+
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  onMouseDown={onDivisorAbajo}
+                  style={{ width: 5, cursor: 'col-resize', background: 'var(--line-soft)', flexShrink: 0 }}
+                />
+
+                <section className="split__main">
+                  <div className="split__head">
+                    {archivo
+                      ? <IconoDeArchivo nombre={archivo.name} />
+                      : <Archive size={15} strokeWidth={ICONO_TRAZO} className="dim" />}
+                    <span className="truncate">{archivo?.name ?? 'Sin archivo seleccionado'}</span>
+                    <span className="spacer" />
+                    {archivo && (
+                      <button
+                        className="btn btn--ghost btn--icon btn--sm"
+                        onClick={() => void window.api.settings.revealFolder(archivo.path)}
+                        title="Mostrar en el sistema"
+                      >
+                        <ExternalLink size={15} strokeWidth={ICONO_TRAZO} />
+                      </button>
+                    )}
+                  </div>
+
+                  {leyendoArchivo ? (
+                    <div className="split__body">
+                      <div className="col">
+                        <div className="skeleton skeleton--row" />
+                        <div className="skeleton skeleton--row" />
+                        <div className="skeleton skeleton--row" />
+                      </div>
+                    </div>
+                  ) : archivo ? (
+                    <VistaPrevia archivo={archivo} onAmpliar={ampliar} />
+                  ) : (
+                    <div className="empty">
+                      <div className="empty__icon">
+                        <FileText size={20} strokeWidth={ICONO_TRAZO} />
+                      </div>
+                      <div className="empty__title">Elige un archivo</div>
+                      <div className="empty__text">
+                        El árbol muestra solo esta colección: su documento, las respuestas y los
+                        recursos descargados.
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {ampliado && (
+          <MediaLightbox
+            url={ampliado.url}
+            tipo={ampliado.tipo}
+            onClose={() => setAmpliado(null)}
+          />
+        )}
+      </>
+    )
+  }
+
+  // ---------- Listado de colecciones ----------
+  const subtitulo = cargando
+    ? 'Leyendo la carpeta de salida'
+    : `${colecciones.length} ${colecciones.length === 1 ? 'colección' : 'colecciones'} · ${formatearBytes(totalBytes)}`
+
+  return (
+    <>
+      <header className="workspace__header">
+        <div className="workspace__titles">
+          <h1 className="workspace__title">Archivo</h1>
+          <div className="workspace__subtitle">{subtitulo}</div>
+        </div>
+
+        <div className="workspace__actions">
+          <button
+            className="btn btn--ghost btn--icon"
+            onClick={() => void cargar()}
+            title="Volver a detectar colecciones"
+            disabled={cargando}
+          >
+            <RefreshCw size={16} strokeWidth={ICONO_TRAZO} />
+          </button>
+          <button
+            className="btn btn--ghost btn--icon"
+            onClick={openOutputFolder}
+            title="Abrir la carpeta en el sistema"
+          >
+            <FolderOpen size={16} strokeWidth={ICONO_TRAZO} />
+          </button>
+        </div>
+      </header>
+
+      <div className="workspace__body workspace__body--flush">
+        <div className="visor">
+          {cargando ? (
+            <div className="colecciones">
+              {[0, 1, 2, 3, 4, 5].map((fila) => (
+                <div key={fila} className="skeleton skeleton--card" />
+              ))}
+            </div>
+          ) : colecciones.length === 0 ? (
+            arbol.length === 0 ? (
+              <div className="empty">
+                <div className="empty__icon">
+                  <Archive size={20} strokeWidth={ICONO_TRAZO} />
+                </div>
+                <div className="empty__title">La carpeta está vacía</div>
+                <div className="empty__text">
+                  Cada descarga crea una carpeta con post.md, thread.md, replies/ y assets/. Abre
+                  Explorar, elige un canal y descarga su primera publicación: aparecerá aquí como
+                  una colección con portada, documento y galería.
+                </div>
+                <div className="row">
+                  <button className="btn btn--primary btn--sm" onClick={() => irA('explorar')}>
+                    <Globe size={14} strokeWidth={ICONO_TRAZO} />
+                    Explorar canales
+                  </button>
+                  <button className="btn btn--ghost btn--sm" onClick={() => void cargar()}>
+                    <RefreshCw size={14} strokeWidth={ICONO_TRAZO} />
+                    Refrescar
+                  </button>
                 </div>
               </div>
-              {/* 
-                FIX: preview-viewport needs min-height: 0 to allow the container 
-                to shrink inside its flex parent and trigger internal overflow scroll.
-              */}
-              <div className="preview-viewport" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                {viewMode === 'rendered' && selectedFile.type === 'md' ? (
-                  /* FIX: markdown-body should not have overflow: hidden or fixed height */
-                  <div className="markdown-body" style={{ flex: 1, height: 'auto' }}>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeRaw]}
-                      urlTransform={(src: string) => {
-                        if (src.startsWith('http') || src.startsWith('file')) return src;
-
-                        // Robust relative path resolution
-                        const parts = selectedFile.path.split(/[\\/]/);
-                        const fileDir = parts.slice(0, -1).join('/');
-
-                        // Try to find /assets/ folder by going up if needed
-                        let currentDir = fileDir;
-                        let absolutePath = '';
-
-                        // Clean src (remove ./ or leading /)
-                        const cleanSrc = src.replace(/^\.?\//, '');
-
-                        // If src starts with assets/, it's likely relative to the post root
-                        // We need to find where assets/ actually is
-                        if (cleanSrc.startsWith('assets/')) {
-                          if (selectedFile.path.includes('/replies/') || selectedFile.path.includes('\\replies\\')) {
-                            const pathParts = fileDir.split(/[\\/]/);
-                            const rootDir = pathParts.slice(0, -1).join('/');
-                            absolutePath = `${rootDir}/${cleanSrc}`;
-                          } else {
-                            absolutePath = `${fileDir}/${cleanSrc}`;
-                          }
-                        } else {
-                          absolutePath = `${fileDir}/${cleanSrc}`;
-                        }
-
-                        return `file://${absolutePath.replace(/\\/g, '/')}`;
-                      }}
-                    >
-                      {selectedFile.content.replace(/^---\r?\n[\s\S]*?\n---\r?\n/, '')}
-                    </ReactMarkdown>
-                  </div>
-                ) : viewMode === 'rendered' && selectedFile.type === 'html' ? (
-                  <HtmlPreview content={selectedFile.content} path={selectedFile.path} />
-                ) : viewMode === 'rendered' && selectedFile.type === 'json' ? (
-                  <JsonViewer content={selectedFile.content} />
-                ) : selectedFile.type === 'pdf' ? (
-                  <PdfViewer path={selectedFile.path} />
-                ) : selectedFile.type === 'epub' ? (
-                  <EpubViewer path={selectedFile.path} />
-                ) : ['zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'csv', 'xml', 'iso'].includes(selectedFile.type) ? (
-                  <div className="full-center" style={{ padding: '2rem' }}>
-                    <div className="empty-state--small">
-                      <Download size={48} color="var(--blue)" />
-                      <h3>{selectedFile.name}</h3>
-                      <p>Este tipo de archivo debe abrirse con una aplicación externa.</p>
-                      <button className="btn btn--primary" onClick={() => window.api.settings.openFolder(selectedFile.path)}>
-                        Abrir Archivo
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="source-code-editor" style={{ flex: 1, minHeight: 0, width: '100%', background: '#1e1e1e' }}>
-                    <SyntaxHighlighter
-                      language={getLanguageFromExt(selectedFile.type)}
-                      style={vscDarkPlus}
-                      showLineNumbers={true}
-                      customStyle={{
-                        margin: 0,
-                        padding: '24px',
-                        background: 'transparent',
-                        fontSize: '13px',
-                        lineHeight: '1.6',
-                        fontFamily: 'var(--font-mono)',
-                        height: '100%'
-                      }}
-                      lineNumberStyle={{
-                        minWidth: '3.5em',
-                        paddingRight: '1.5em',
-                        color: 'var(--text-3)',
-                        opacity: 0.4,
-                        textAlign: 'right',
-                        userSelect: 'none'
-                      }}
-                    >
-                      {selectedFile.content}
-                    </SyntaxHighlighter>
-                  </div>
+            ) : (
+              <div className="empty">
+                <div className="empty__icon">
+                  <Folder size={20} strokeWidth={ICONO_TRAZO} />
+                </div>
+                <div className="empty__title">No se detectaron colecciones</div>
+                <div className="empty__text">
+                  Hay archivos en la carpeta, pero ninguna carpeta contiene post.md, thread.md ni
+                  index.md. Estrato reconoce una colección por esos documentos: si acabas de mover
+                  archivos a mano, refresca la detección.
+                </div>
+                <button className="btn btn--sm" onClick={() => void cargar()}>
+                  <RefreshCw size={14} strokeWidth={ICONO_TRAZO} />
+                  Refrescar
+                </button>
+              </div>
+            )
+          ) : (
+            <>
+              <div className="visor__barra">
+                <div className="search spacer">
+                  <Search size={14} strokeWidth={ICONO_TRAZO} className="search__icon" />
+                  <input
+                    className="input input--search"
+                    type="search"
+                    placeholder="Buscar por título, canal o servidor"
+                    value={busqueda}
+                    onChange={(evento) => setBusqueda(evento.target.value)}
+                  />
+                </div>
+                {busqueda.trim() && (
+                  <span className="muted mono">
+                    {coleccionesFiltradas.length} de {colecciones.length}
+                  </span>
                 )}
               </div>
-            </div>
-          ) : (
-            <div className="archive-empty-landing" style={{
-              flex: 1,
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              alignItems: 'center',
-              padding: '40px',
-              textAlign: 'center',
-              background: 'radial-gradient(circle at center, rgba(88, 101, 242, 0.05) 0%, transparent 70%)'
-            }}>
-              <div className="empty-hero" style={{ position: 'relative', width: 200, height: 200, marginBottom: 32 }}>
-                <ArchiveAnimation />
-              </div>
 
-              <div style={{ maxWidth: 450, position: 'relative' }}>
-                <h2 style={{ 
-                  color: 'var(--text-0)', 
-                  marginBottom: 12, 
-                  fontSize: '1.8rem', 
-                  fontWeight: 800,
-                  letterSpacing: '-0.02em',
-                  background: 'linear-gradient(to bottom, #fff, #999)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent'
-                }}>
-                  Explorador de Archivos
-                </h2>
-                <p style={{ 
-                  fontSize: 'var(--font-md)', 
-                  color: 'var(--text-2)', 
-                  lineHeight: 1.6,
-                  marginBottom: 32
-                }}>
-                  Bienvenido a tu biblioteca personal. Navega por el árbol de directorios a la izquierda para visualizar mensajes, medios y documentos exportados con fidelidad de producción.
-                </p>
-
-                <div className="empty-tips" style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: '1fr 1fr', 
-                  gap: 16,
-                  marginTop: 20
-                }}>
-                  <div className="tip-card" style={{
-                    padding: '16px',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    borderRadius: '12px',
-                    textAlign: 'left',
-                    transition: 'transform 0.2s, background 0.2s',
-                    cursor: 'default'
-                  }}>
-                    <BookOpen size={18} color="var(--accent)" style={{ marginBottom: 12 }} />
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-1)', marginBottom: 4 }}>Previsualización</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>Soporte nativo para Markdown, PDF, EPUB, JSON e Imágenes.</div>
-                  </div>
-                  <div className="tip-card" style={{
-                    padding: '16px',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    borderRadius: '12px',
-                    textAlign: 'left',
-                    transition: 'transform 0.2s, background 0.2s',
-                    cursor: 'default'
-                  }}>
-                    <Maximize2 size={18} color="var(--green)" style={{ marginBottom: 12 }} />
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-1)', marginBottom: 4 }}>Interactividad</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>Zoom en imágenes, búsqueda en árbol y cambio de temas.</div>
+              {coleccionesFiltradas.length > 0 ? (
+                <Colecciones colecciones={coleccionesFiltradas} onAbrir={abrirColeccion} />
+              ) : (
+                <div className="empty">
+                  <Search size={16} strokeWidth={ICONO_TRAZO} className="dim" />
+                  <div className="empty__title">Sin coincidencias</div>
+                  <div className="empty__text">
+                    Ninguna colección coincide con «{busqueda}». Prueba con el nombre del canal o
+                    del servidor.
                   </div>
                 </div>
-              </div>
-
-              {/* Add keyframe animations directly to style tag or via CSS (assuming we can inject it) */}
-              <style dangerouslySetInnerHTML={{ __html: `
-                @keyframes float {
-                  0%, 100% { transform: translateY(0px) rotate(0deg); }
-                  50% { transform: translateY(-15px) rotate(2deg); }
-                }
-                @keyframes pulse {
-                  0% { opacity: 0.05; transform: scale(1); }
-                  100% { opacity: 0.12; transform: scale(1.1); }
-                }
-                .tip-card:hover {
-                  background: rgba(255,255,255,0.06) !important;
-                  transform: translateY(-4px);
-                }
-              `}} />
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>
+    </>
+  )
+}
+
+/** Icono por extensión: monocromo para no competir con el contenido. */
+function IconoDeArchivo({ nombre }: { nombre: string }) {
+  const ext = extensionDe(nombre)
+  const props = { size: 15, strokeWidth: ICONO_TRAZO, className: 'dim' } as const
+
+  if (EXT_IMAGEN.includes(ext)) return <FileImage {...props} />
+  if (EXT_VIDEO.includes(ext)) return <FileVideo {...props} />
+  if (EXT_AUDIO.includes(ext)) return <FileAudio {...props} />
+  if (ext === 'json') return <FileJson {...props} />
+  if (ext === 'html' || ext === 'htm') return <Globe {...props} />
+  if (ext === 'pdf' || ext === 'epub') return <BookOpen {...props} />
+  if (EXT_TEXTO.includes(ext)) return <FileText {...props} />
+  return <File {...props} />
+}
+
+interface PropsArbol {
+  entradas: ArchiveFileEntry[]
+  activo: string | null
+  consulta: string
+  onAbrir: (entrada: ArchiveFileEntry) => void
+  profundidad?: number
+}
+
+function Arbol({ entradas, activo, consulta, onAbrir, profundidad = 0 }: PropsArbol) {
+  return (
+    <>
+      {entradas.map((entrada) => (
+        <Rama
+          key={entrada.path}
+          entrada={entrada}
+          activo={activo}
+          consulta={consulta}
+          onAbrir={onAbrir}
+          profundidad={profundidad}
+        />
+      ))}
+    </>
+  )
+}
+
+interface PropsRama {
+  entrada: ArchiveFileEntry
+  activo: string | null
+  consulta: string
+  onAbrir: (entrada: ArchiveFileEntry) => void
+  profundidad: number
+}
+
+function Rama({ entrada, activo, consulta, onAbrir, profundidad }: PropsRama) {
+  const [abierta, setAbierta] = useState(profundidad === 0)
+  const esCarpeta = entrada.type === 'dir'
+  const hijos = entrada.children ?? []
+  // Con una búsqueda activa las carpetas se abren solas para mostrar la coincidencia.
+  const desplegada = consulta.trim() ? true : abierta
+
+  const alPulsar = () => {
+    if (esCarpeta) setAbierta((valor) => !valor)
+    else onAbrir(entrada)
+  }
+
+  return (
+    <>
+      <div
+        className={`arbol__fila${activo === entrada.path ? ' arbol__fila--activo' : ''}`}
+        style={{ paddingLeft: 10 + profundidad * 14 }}
+        onClick={alPulsar}
+        onKeyDown={(evento) => {
+          if (evento.key === 'Enter' || evento.key === ' ') {
+            evento.preventDefault()
+            alPulsar()
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        title={entrada.path}
+      >
+        {esCarpeta
+          ? desplegada
+            ? <FolderOpen size={15} strokeWidth={ICONO_TRAZO} className="muted" />
+            : <Folder size={15} strokeWidth={ICONO_TRAZO} className="muted" />
+          : <IconoDeArchivo nombre={entrada.name} />}
+
+        <span className="truncate">{resaltar(entrada.name, consulta)}</span>
+        <span className="spacer" />
+
+        {esCarpeta
+          ? hijos.length > 0 && <span className="mono dim">{hijos.length}</span>
+          : !!entrada.size && <span className="mono dim">{formatearBytes(entrada.size)}</span>}
+      </div>
+
+      {esCarpeta && desplegada && hijos.length > 0 && (
+        <Arbol
+          entradas={hijos}
+          activo={activo}
+          consulta={consulta}
+          onAbrir={onAbrir}
+          profundidad={profundidad + 1}
+        />
+      )}
+    </>
+  )
+}
+
+interface PropsPrevia {
+  archivo: ArchivoAbierto
+  onAmpliar: (url: string, tipo: TipoAmpliado) => void
+}
+
+function VistaPrevia({ archivo, onAmpliar }: PropsPrevia) {
+  const ext = archivo.tipo
+  const url = window.api.archive.toUrl(archivo.path)
+
+  if (archivo.error) {
+    return (
+      <div className="empty">
+        <div className="empty__icon">
+          <TriangleAlert size={20} strokeWidth={ICONO_TRAZO} />
+        </div>
+        <div className="empty__title">No se pudo leer el archivo</div>
+        <div className="empty__text">
+          El archivo existe en la carpeta pero no se pudo abrir. Puede estar en uso o sin permisos.
+        </div>
+        <button className="btn btn--sm" onClick={() => void window.api.settings.revealFolder(archivo.path)}>
+          <ExternalLink size={14} strokeWidth={ICONO_TRAZO} />
+          Mostrar en el sistema
+        </button>
+      </div>
+    )
+  }
+
+  if (EXT_IMAGEN.includes(ext)) {
+    return (
+      <div className="split__body">
+        <div className="empty">
+          <img src={url} alt={archivo.name} onClick={() => onAmpliar(url, 'imagen')} />
+        </div>
+      </div>
+    )
+  }
+
+  if (EXT_VIDEO.includes(ext)) {
+    return (
+      <div className="split__body">
+        <div className="empty">
+          <video src={url} controls playsInline />
+          <button className="btn btn--ghost btn--sm" onClick={() => onAmpliar(url, 'video')}>
+            <Expand size={14} strokeWidth={ICONO_TRAZO} />
+            Ampliar
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (EXT_AUDIO.includes(ext)) {
+    return (
+      <div className="empty">
+        <div className="empty__icon">
+          <FileAudio size={20} strokeWidth={ICONO_TRAZO} />
+        </div>
+        <div className="empty__title truncate">{archivo.name}</div>
+        <audio src={url} controls />
+      </div>
+    )
+  }
+
+  if (ext === 'epub') return <EpubViewer path={archivo.path} />
+
+  if (ext === 'pdf') {
+    return (
+      <iframe
+        className="workspace__body"
+        src={`${url}#view=FitH&toolbar=1`}
+        title={`PDF · ${archivo.name}`}
+        frameBorder={0}
+      />
+    )
+  }
+
+  if (ext === 'html' || ext === 'htm') {
+    // archive:// es la única vía para cargar archivos locales con webSecurity activo.
+    // sandbox vacío: el HTML exportado funciona sin JS (el toggle de tema es CSS puro).
+    return (
+      <iframe
+        className="workspace__body"
+        src={url}
+        title={`HTML · ${archivo.name}`}
+        sandbox=""
+        referrerPolicy="no-referrer"
+        frameBorder={0}
+      />
+    )
+  }
+
+  if (ext === 'md') {
+    return (
+      <VisorDocumento
+        contenido={archivo.contenido}
+        ruta={archivo.path}
+        onAmpliar={(imagen) => onAmpliar(imagen, 'imagen')}
+      />
+    )
+  }
+
+  if (ext === 'json') {
+    return <VistaJson contenido={archivo.contenido} truncado={archivo.truncado} />
+  }
+
+  if (EXT_TEXTO.includes(ext)) {
+    return <VistaCodigo contenido={archivo.contenido} lenguaje={LENGUAJE_POR_EXT[ext] ?? 'text'} />
+  }
+
+  return (
+    <div className="empty">
+      <div className="empty__icon">
+        <File size={20} strokeWidth={ICONO_TRAZO} />
+      </div>
+      <div className="empty__title truncate">{archivo.name}</div>
+      <div className="empty__text">
+        {EXT_BINARIO.includes(ext)
+          ? 'Este tipo de archivo no se puede previsualizar dentro de la aplicación.'
+          : 'No hay un visor para esta extensión.'}
+      </div>
+      <button className="btn btn--sm" onClick={() => void window.api.settings.openFolder(archivo.path)}>
+        <ExternalLink size={14} strokeWidth={ICONO_TRAZO} />
+        Abrir con la aplicación del sistema
+      </button>
     </div>
   )
 }
 
-function HtmlPreview({ path: filePath }: { content: string; path: string }) {
-  // Use file:// protocol for Electron IFRAME
-  // FIX: Ensure iframe takes full space and handles internal scrolling
-  const fileUri = `file://${filePath.replace(/\\/g, '/')}`;
-
+/** Vista de código reutilizada por el visor JSON y por los archivos de texto. */
+function VistaCodigo({ contenido, lenguaje }: { contenido: string; lenguaje: string }) {
   return (
-    /* 
-      FIX: The HTML container MUST allow the iframe to take 100% of the available 
-      height and handle its own scrollbars. Added flex properties to ensure expansion.
-    */
-    <div className="html-preview-container" style={{
-      flex: 1,
-      width: '100%',
-      height: '100%',
-      minHeight: 0,
-      background: '#0f0f12',
-      overflow: 'hidden',
-      display: 'flex'
-    }}>
-      <iframe
-        src={fileUri}
-        style={{
-          flex: 1,
-          width: '100%',
-          height: '100%',
-          border: 'none',
-          backgroundColor: '#fff'
-        }}
-        title="HTML Preview"
-        sandbox="allow-same-origin allow-scripts allow-popups"
-      />
+    <div className="split__body">
+      <SyntaxHighlighter
+        language={lenguaje}
+        style={vscDarkPlus}
+        showLineNumbers
+        customStyle={ESTILO_CODIGO}
+      >
+        {contenido}
+      </SyntaxHighlighter>
     </div>
-  );
+  )
 }
 
-function JsonViewer({ content }: { content: string }) {
-  // Memoize parsing to prevent expensive re-renders on every parent toggle
-  const data = useMemo(() => {
+function VistaJson({ contenido, truncado }: { contenido: string; truncado: boolean }) {
+  // Si el archivo llegó truncado el JSON es inválido por definición: no se intenta parsear.
+  const formateado = useMemo(() => {
+    if (truncado) return contenido
     try {
-      return typeof content === 'string' ? JSON.parse(content) : content;
+      return JSON.stringify(JSON.parse(contenido), null, 2)
     } catch {
-      return null;
+      return contenido
     }
-  }, [content])
-
-  // Fallback if parsing fails or content is not valid JSON
-  if (!data) {
-    return (
-      <div style={{ flex: 1, background: '#1e1e1e' }}>
-        <SyntaxHighlighter language="json" style={vscDarkPlus} customStyle={{ margin: 0, background: 'transparent' }}>
-          {content}
-        </SyntaxHighlighter>
-      </div>
-    );
-  }
+  }, [contenido, truncado])
 
   return (
-    <div className="json-visualizer" style={{
-      flex: 1,
-      overflow: 'auto',
-      padding: '20px',
-      background: 'var(--bg-1)',
-      minHeight: 0
-    }}>
-      <ReactJson
-        src={data}
-        theme="ocean"
-        style={{
-          background: 'transparent',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '13px'
-        }}
-        iconStyle="circle"
-        displayDataTypes={false}
-        displayObjectSize={true}
-        enableClipboard={true}
-        collapsed={2} // Start with a reasonable collapse depth for big files
-        collapseStringsAfterLength={100}
-        name={false}
-        onEdit={false} // Read-only for viewer
-        onAdd={false}
-        onDelete={false}
-      />
-    </div>
-  );
-}
-
-function PdfViewer({ path }: { path: string }) {
-  const [loading, setLoading] = useState(true)
-  const fileUri = `file://${path.replace(/\\/g, '/')}`
-
-  return (
-    <div className="pdf-viewer-native" style={{ 
-      flex: 1, 
-      display: 'flex', 
-      flexDirection: 'column', 
-      height: '100%', 
-      background: '#1a1a1c',
-      position: 'relative',
-      minHeight: 0
-    }}>
-      {loading && (
-        <div className="full-center" style={{ 
-          position: 'absolute', 
-          inset: 0, 
-          zIndex: 10, 
-          background: 'var(--bg-0)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12
-        }}>
-          <RefreshCw className="animate-spin" size={24} color="var(--accent)" />
-          <span style={{ fontSize: 13, fontWeight: 500 }}>Sincronizando visor nativo...</span>
-        </div>
-      )}
-      
-      <iframe
-        src={`${fileUri}#view=FitH&toolbar=1`}
-        style={{ 
-          flex: 1, 
-          width: '100%', 
-          height: '100%', 
-          border: 'none',
-          visibility: loading ? 'hidden' : 'visible'
-        }}
-        onLoad={() => setLoading(false)}
-        title="PDF Preview"
-      />
+    <div className="split__body">
+      <SyntaxHighlighter language="json" style={vscDarkPlus} customStyle={ESTILO_CODIGO}>
+        {formateado}
+      </SyntaxHighlighter>
     </div>
   )
 }
 
 function EpubViewer({ path }: { path: string }) {
-  const viewerRef = useRef<HTMLDivElement>(null)
+  const visorRef = useRef<HTMLDivElement | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [meta, setMeta] = useState<any>(null)
-  const [fontSize, setFontSize] = useState(100)
-  const [theme, setTheme] = useState<'light' | 'dark' | 'sepia'>('light')
-  const [location, setLocation] = useState<string | null>(null)
+  const [titulo, setTitulo] = useState('')
+  const [posicion, setPosicion] = useState('')
+  const [tema, setTema] = useState<'light' | 'sepia' | 'dark'>('light')
+  const [tamano, setTamano] = useState(100)
+
+  const aplicarTema = useCallback((siguiente: 'light' | 'sepia' | 'dark') => {
+    const rendition = renditionRef.current
+    if (!rendition) return
+    for (const nombre of ['light', 'sepia', 'dark'] as const) {
+      rendition.themes.register(nombre, { body: TEMAS_EPUB[nombre].body })
+    }
+    rendition.themes.select(siguiente)
+    setTema(siguiente)
+  }, [])
 
   useEffect(() => {
-    if (!viewerRef.current) return
-    const book = ePub(`file://${path}`)
+    const host = visorRef.current
+    if (!host) return
 
-    book.loaded.metadata.then(m => setMeta(m))
+    const libro = ePub(window.api.archive.toUrl(path))
+    void libro.loaded.metadata.then((meta) => setTitulo(meta.title || ''))
 
-    const rendition = book.renderTo(viewerRef.current, {
-      width: '100%',
-      height: '100%',
-      flow: 'paginated',
-      manager: 'default',
-    })
-
+    const rendition = libro.renderTo(host, { width: '100%', height: '100%', flow: 'paginated' })
     renditionRef.current = rendition
 
-    rendition.display().then(() => {
-      setLoading(false)
-      applyTheme(theme)
-    })
+    void rendition.display().then(() => aplicarTema('light'))
 
-    rendition.on('relocated', (loc: any) => {
-      setLocation(loc.start.displayed.page + ' / ' + loc.start.displayed.total)
+    rendition.on('relocated', (ubicacion: Location) => {
+      const pagina = ubicacion.start?.displayed?.page
+      const total = ubicacion.start?.displayed?.total
+      if (pagina && total) setPosicion(`${pagina} / ${total}`)
     })
 
     return () => {
-      book.destroy()
+      renditionRef.current = null
+      libro.destroy()
     }
-  }, [path])
-
-  const applyTheme = (t: typeof theme) => {
-    if (!renditionRef.current) return
-    const themes = renditionRef.current.themes
-    themes.register('dark', { body: { background: '#121214', color: '#e1e1e6' } })
-    themes.register('sepia', { body: { background: '#f4ecd8', color: '#5b4636' } })
-    themes.register('light', { body: { background: '#ffffff', color: '#1a1a1a' } })
-    themes.select(t)
-    setTheme(t)
-  }
+  }, [path, aplicarTema])
 
   useEffect(() => {
-    if (renditionRef.current) {
-      renditionRef.current.themes.fontSize(`${fontSize}%`)
-    }
-  }, [fontSize])
+    renditionRef.current?.themes.fontSize(`${tamano}%`)
+  }, [tamano])
 
   return (
-    <div className={`epub-viewer-v2 theme-${theme}`} style={{ display: 'flex', flexDirection: 'column', height: '100%', background: theme === 'dark' ? '#0a0a0c' : theme === 'sepia' ? '#efe3c5' : '#f0f0f5' }}>
-      <div className="viewer-controls viewer-controls--glass">
-        <div className="viewer-controls__group">
-          <button className="btn btn--ghost btn--xs" onClick={() => renditionRef.current?.prev()}><ChevronLeft size={18} /></button>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <span className="viewer-info" style={{ fontWeight: 600 }}>{meta?.title || 'Leyendo EPUB'}</span>
-            <span style={{ fontSize: 9, opacity: 0.6 }}>{location || 'Cargando...'}</span>
-          </div>
-          <button className="btn btn--ghost btn--xs" onClick={() => renditionRef.current?.next()}><ChevronRight size={18} /></button>
+    <>
+      <div className="split__head">
+        <button
+          className="btn btn--ghost btn--icon btn--sm"
+          onClick={() => { void renditionRef.current?.prev() }}
+          title="Página anterior"
+        >
+          <ChevronLeft size={16} strokeWidth={ICONO_TRAZO} />
+        </button>
+        <button
+          className="btn btn--ghost btn--icon btn--sm"
+          onClick={() => { void renditionRef.current?.next() }}
+          title="Página siguiente"
+        >
+          <ChevronRight size={16} strokeWidth={ICONO_TRAZO} />
+        </button>
+
+        <div className="col truncate">
+          <span className="truncate">{titulo || 'Libro sin título'}</span>
+          <span className="mono dim">{posicion || 'Abriendo…'}</span>
         </div>
+
         <div className="spacer" />
-        <div className="viewer-controls__group">
-          <div className="epub-themes">
-            <button className={`theme-dot light ${theme === 'light' ? 'active' : ''}`} onClick={() => applyTheme('light')} />
-            <button className={`theme-dot sepia ${theme === 'sepia' ? 'active' : ''}`} onClick={() => applyTheme('sepia')} />
-            <button className={`theme-dot dark ${theme === 'dark' ? 'active' : ''}`} onClick={() => applyTheme('dark')} />
-          </div>
-          <div className="spacer--h" style={{ width: 12 }} />
-          <button className="btn btn--ghost btn--xs" onClick={() => setFontSize(f => Math.min(200, f + 10))} title="Aumentar fuente"><Plus size={14} /></button>
-          <span style={{ fontSize: 11, width: 35, textAlign: 'center' }}>{fontSize}%</span>
-          <button className="btn btn--ghost btn--xs" onClick={() => setFontSize(f => Math.max(50, f - 10))} title="Disminuir fuente"><Minus size={14} /></button>
-        </div>
+
+        {(['light', 'sepia', 'dark'] as const).map((nombre) => (
+          <button
+            key={nombre}
+            className={`btn btn--sm${tema === nombre ? '' : ' btn--ghost'}`}
+            onClick={() => aplicarTema(nombre)}
+            title={`Tema ${TEMAS_EPUB[nombre].etiqueta.toLowerCase()}`}
+          >
+            {TEMAS_EPUB[nombre].etiqueta}
+          </button>
+        ))}
+
+        <button
+          className="btn btn--ghost btn--icon btn--sm"
+          onClick={() => setTamano((valor) => Math.max(50, valor - 10))}
+          title="Reducir fuente"
+        >
+          <Minus size={14} strokeWidth={ICONO_TRAZO} />
+        </button>
+        <span className="mono dim">{tamano}%</span>
+        <button
+          className="btn btn--ghost btn--icon btn--sm"
+          onClick={() => setTamano((valor) => Math.min(200, valor + 10))}
+          title="Aumentar fuente"
+        >
+          <Plus size={14} strokeWidth={ICONO_TRAZO} />
+        </button>
       </div>
-      <div className="epub-viewport-container" style={{ flex: 1, position: 'relative', margin: '15px', borderRadius: 8, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.15)', background: theme === 'dark' ? '#121214' : theme === 'sepia' ? '#f4ecd8' : '#fff' }}>
-        <div ref={viewerRef} style={{ height: '100%' }} />
-        {loading && <div className="loader full-center">Abriendo libro...</div>}
-      </div>
-    </div>
-  )
-}
 
-function TreeNode({ entries, depth, onFileClick, activePath }: { entries: FileEntry[]; depth: number; onFileClick: (e: FileEntry) => void; activePath?: string }) {
-  return (
-    <div className="tree-node">
-      {entries.map((entry, idx) => (
-        <TreeItem key={`${entry.name}-${idx}`} entry={entry} depth={depth} onFileClick={onFileClick} activePath={activePath} />
-      ))}
-    </div>
-  )
-}
-
-function TreeItem({ entry, depth, onFileClick, activePath }: { entry: FileEntry; depth: number; onFileClick: (e: FileEntry) => void; activePath?: string }) {
-  const [open, setOpen] = useState(depth < 1)
-  const isDir = entry.type === 'dir'
-  const isActive = activePath === entry.path
-  const ext = entry.name.split('.').pop()?.toLowerCase() || ''
-
-  let icon = <File size={14} color="var(--text-3)" />
-  if (isDir) icon = open ? <FolderOpen size={14} color="var(--blue)" /> : <Folder size={14} color="var(--blue)" />
-  else if (IMAGE_EXTS.includes(ext)) icon = <FileImage size={14} color="var(--green)" />
-  else if (ext === 'md') icon = <FileText size={14} color="var(--text-1)" />
-  else if (ext === 'pdf') icon = <BookOpen size={14} color="var(--red)" />
-  else if (ext === 'epub') icon = <BookOpen size={14} color="var(--amber)" />
-  else if (ext === 'html') icon = <Globe size={14} color="var(--blue)" />
-  else if (ext === 'json') icon = <FileJson size={14} color="var(--text-2)" />
-
-  return (
-    <div className="tree-item-wrapper">
-      <div className={`tree-item${isDir ? ' tree-item--dir' : ''}${isActive ? ' tree-item--active' : ''}`}
-        style={{ paddingLeft: 12 + depth * 12 }}
-        onClick={() => { if (isDir) setOpen(!open); else onFileClick(entry); }}>
-        <span className="tree-item__icon">{icon}</span>
-        <span className="tree-item__name">{entry.name}</span>
-        {entry.size !== undefined && entry.size > 0 && !isDir && (
-          <span className="tree-item__size">{formatSize(entry.size)}</span>
-        )}
-      </div>
-      {isDir && open && entry.children && entry.children.length > 0 && (
-        <TreeNode entries={entry.children} depth={depth + 1} onFileClick={onFileClick} activePath={activePath} />
-      )}
-    </div>
-  )
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1048576).toFixed(1)} MB`
-}
-
-/**
- * Premium SVG Animation Component
- * Renders a multi-layered futuristic archive icon with CSS transitions.
- */
-function ArchiveAnimation() {
-  return (
-    <div className="archive-anim-container" style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      position: 'relative'
-    }}>
-      {/* Background glow */}
-      <div style={{
-        position: 'absolute',
-        width: '120%',
-        height: '120%',
-        background: 'radial-gradient(circle, var(--accent) 0%, transparent 60%)',
-        opacity: 0.15,
-        filter: 'blur(30px)',
-        animation: 'glowPulse 4s infinite alternate ease-in-out'
-      }} />
-
-      <svg width="120" height="120" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        {/* Shadow/Base */}
-        <path d="M4 19V5C4 3.89543 4.89543 3 6 3H18C19.1046 3 20 3.89543 20 5V19C20 20.1046 19.1046 21 18 21H6C4.89543 21 4 20.1046 4 19Z" fill="var(--bg-1)" fillOpacity="0.1" />
-        
-        {/* Back page */}
-        <path className="page-anim-back" d="M18 19V5C18 4.44772 17.5523 4 17 4H7C6.44772 4 6 4.44772 6 5V19C6 20.1046 6.89543 21 8 21H16C17.1046 21 18 20.1046 18 19Z" stroke="var(--accent)" strokeWidth="1.5" strokeOpacity="0.3" />
-        
-        {/* Main folder/book cover */}
-        <path className="folder-anim-main" d="M22 19V9C22 7.89543 21.1046 7 20 7H13.4142C13.149 7 12.8946 6.89464 12.7071 6.70711L10.2929 4.29289C10.1054 4.10536 9.85095 4 9.58579 4H4C2.89543 4 2 4.89543 2 6V19C2 20.1046 2.89543 21 4 21H20C21.1046 21 22 20.1046 22 19Z" fill="url(#folderGradient)" stroke="var(--accent)" strokeWidth="1.5" />
-        
-        {/* Content lines */}
-        <path className="line-anim-1" d="M7 12H17" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.6" />
-        <path className="line-anim-2" d="M7 15H14" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeOpacity="0.6" />
-        
-        <defs>
-          <linearGradient id="folderGradient" x1="2" y1="4" x2="22" y2="21" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="var(--accent)" stopOpacity="0.1" />
-            <stop offset="1" stopColor="var(--accent)" stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-      </svg>
-
-      <style dangerouslySetInnerHTML={{ __html: `
-        @keyframes glowPulse {
-          0% { transform: scale(0.8); opacity: 0.1; }
-          100% { transform: scale(1.1); opacity: 0.25; }
-        }
-        .folder-anim-main {
-          animation: floatFolder 4s infinite ease-in-out;
-        }
-        .page-anim-back {
-          animation: slidePage 4s infinite ease-in-out;
-        }
-        .line-anim-1 {
-          animation: scanLine 3s infinite ease-in-out;
-        }
-        .line-anim-2 {
-          animation: scanLine 3s infinite ease-in-out 0.5s;
-        }
-        @keyframes floatFolder {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-5px); }
-        }
-        @keyframes slidePage {
-          0%, 100% { transform: translateY(0) translateX(0); }
-          50% { transform: translateY(-12px) translateX(4px); }
-        }
-        @keyframes scanLine {
-          0%, 100% { stroke-dasharray: 0, 20; stroke-dashoffset: 0; opacity: 0; }
-          20% { opacity: 0.6; }
-          50% { stroke-dasharray: 10, 0; stroke-dashoffset: -5; }
-          80% { opacity: 0.6; }
-        }
-      `}} />
-    </div>
+      <div ref={visorRef} className="workspace__body" />
+    </>
   )
 }

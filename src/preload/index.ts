@@ -1,49 +1,52 @@
 // ============================================================
-// Preload Script — Context bridge exposing safe APIs
-// to the renderer process.
+// Preload — Context bridge. Única superficie que el renderer
+// puede tocar. Todas las suscripciones devuelven unsub().
 // ============================================================
 
 import { contextBridge, ipcRenderer } from 'electron'
 
+function subscribe<T extends unknown[]>(
+  channel: string,
+  callback: (...args: T) => void
+): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {
+    callback(...(args as T))
+  }
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
+
 const api = {
-  // Auth
+  // Autenticación
   auth: {
     setToken: (token: string) => ipcRenderer.invoke('auth:set-token', token),
-    getToken: () => ipcRenderer.invoke('auth:get-token'),
     validate: () => ipcRenderer.invoke('auth:validate'),
     clear: () => ipcRenderer.invoke('auth:clear'),
     onAutoConnected: (callback: (connected: boolean) => void) =>
-      ipcRenderer.on('auth:auto-connected', (_e, connected) => callback(connected))
+      subscribe<[boolean]>('auth:auto-connected', callback)
   },
 
-  // Discord browsing
+  // Navegación de Discord
   discord: {
     getGuilds: () => ipcRenderer.invoke('discord:get-guilds'),
+    getGuild: (guildId: string) => ipcRenderer.invoke('discord:get-guild', guildId),
     getChannels: (guildId: string) => ipcRenderer.invoke('discord:get-channels', guildId),
     getChannelInfo: (channelId: string) => ipcRenderer.invoke('discord:get-channel-info', channelId),
     getForumPosts: (channelId: string, offset?: number) =>
       ipcRenderer.invoke('discord:get-forum-posts', channelId, offset),
-    getAllForumPosts: (channelId: string) =>
-      ipcRenderer.invoke('discord:get-all-forum-posts', channelId),
-    // Allow renderer to request cancellation of an in-progress full fetch.
-    cancelGetAllForumPosts: (channelId: string) => ipcRenderer.invoke('discord:cancel-get-all-forum-posts', channelId),
-    // Progress events for long-running forum fetches. We expose a helper
-    // that registers the callback and returns an unsubscribe function so
-    // consumers can avoid leaking listeners.
-    onForumPostsProgress: (callback: (progress: { count: number; total: number }) => void) => {
-      const handler = (_e: any, data: any) => callback(data)
-      ipcRenderer.on('forum-posts-progress', handler)
-      return () => ipcRenderer.removeListener('forum-posts-progress', handler)
-    },
-    getThreadMessages: (threadId: string) =>
-      ipcRenderer.invoke('discord:get-thread-messages', threadId),
-    getGuild: (guildId: string) =>
-      ipcRenderer.invoke('discord:get-guild', guildId),
+    getAllForumPosts: (channelId: string) => ipcRenderer.invoke('discord:get-all-forum-posts', channelId),
+    cancelGetAllForumPosts: (channelId: string) =>
+      ipcRenderer.invoke('discord:cancel-get-all-forum-posts', channelId),
+    onForumPostsProgress: (callback: (progress: { count: number; total: number }) => void) =>
+      subscribe<[{ count: number; total: number }]>('forum-posts-progress', callback),
+    getThreadMessages: (threadId: string) => ipcRenderer.invoke('discord:get-thread-messages', threadId),
+    getMessagePage: (threadId: string, before?: string, limit?: number) =>
+      ipcRenderer.invoke('discord:get-message-page', threadId, before, limit),
     getGuildIcon: (guildId: string, hash: string | null) =>
       ipcRenderer.invoke('discord:get-guild-icon', guildId, hash)
   },
 
-  // Cache
+  // Caché
   cache: {
     checkPost: (threadId: string) => ipcRenderer.invoke('cache:check-post', threadId),
     checkStatus: (threadId: string) => ipcRenderer.invoke('cache:check-status', threadId),
@@ -51,11 +54,17 @@ const api = {
     clear: () => ipcRenderer.invoke('cache:clear')
   },
 
-  // Downloads
+  // Descargas
   download: {
-    start: (threads: any[], guildName: string, channelName: string, exportOptions: any, contentSelection: any) =>
-      ipcRenderer.invoke('download:start', threads, guildName, channelName, exportOptions, contentSelection),
+    start: (
+      threads: unknown[],
+      guildName: string,
+      channelName: string,
+      exportOptions: unknown,
+      contentSelection: unknown
+    ) => ipcRenderer.invoke('download:start', threads, guildName, channelName, exportOptions, contentSelection),
     getQueue: () => ipcRenderer.invoke('download:get-queue'),
+    getHistory: (limit = 50, offset = 0) => ipcRenderer.invoke('download:get-history', limit, offset),
     pauseAll: () => ipcRenderer.invoke('download:pause-all'),
     resumeAll: () => ipcRenderer.invoke('download:resume-all'),
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId),
@@ -64,60 +73,61 @@ const api = {
     retry: (taskId: string) => ipcRenderer.invoke('download:retry', taskId),
     setConcurrency: (n: number) => ipcRenderer.invoke('download:set-concurrency', n),
 
-    // getHistory: Query persisted download history (audit/exports). Returns an
-    // array of recent completed/errored exports. Non-blocking and paginated.
-    getHistory: (limit = 50, offset = 0) => ipcRenderer.invoke('download:get-history', limit, offset),
-
-    // Events from main
-    onTaskStarted: (callback: (task: any) => void) =>
-      ipcRenderer.on('download:task-started', (_e, task) => callback(task)),
-    onTaskProgress: (callback: (taskId: string, progress: any) => void) =>
-      ipcRenderer.on('download:task-progress', (_e, taskId, progress) => callback(taskId, progress)),
-    onTaskCompleted: (callback: (task: any) => void) =>
-      ipcRenderer.on('download:task-completed', (_e, task) => callback(task)),
-    onTaskError: (callback: (taskId: string, error: string) => void) =>
-      ipcRenderer.on('download:task-error', (_e, taskId, error) => callback(taskId, error)),
-    onQueueUpdated: (callback: (queue: any[]) => void) =>
-      ipcRenderer.on('download:queue-updated', (_e, queue) => callback(queue)),
-    onAllCompleted: (callback: () => void) =>
-      ipcRenderer.on('download:all-completed', () => callback())
+    onTaskStarted: (cb: (task: unknown) => void) => subscribe<[unknown]>('download:task-started', cb),
+    onTaskProgress: (cb: (taskId: string, progress: unknown) => void) =>
+      subscribe<[string, unknown]>('download:task-progress', cb),
+    onTaskCompleted: (cb: (task: unknown) => void) => subscribe<[unknown]>('download:task-completed', cb),
+    onTaskError: (cb: (taskId: string, error: string) => void) =>
+      subscribe<[string, string]>('download:task-error', cb),
+    onQueueUpdated: (cb: (queue: unknown[]) => void) => subscribe<[unknown[]]>('download:queue-updated', cb),
+    onAllCompleted: (cb: () => void) => subscribe<[]>('download:all-completed', cb)
   },
 
-  // Settings
+  // Ajustes
   settings: {
     pickDirectory: () => ipcRenderer.invoke('settings:pick-directory'),
     getRateLimiterStats: () => ipcRenderer.invoke('settings:get-rate-limiter-stats'),
     getDbStats: () => ipcRenderer.invoke('settings:get-db-stats'),
     saveOutputDir: (dir: string) => ipcRenderer.invoke('settings:save-output-dir', dir),
-    getOutputDir: () => ipcRenderer.invoke('settings:get-output-dir'),
-    saveAll: (preferences: any) => ipcRenderer.invoke('settings:save-all', preferences),
+    saveAll: (preferences: Record<string, unknown>) => ipcRenderer.invoke('settings:save-all', preferences),
     getAll: () => ipcRenderer.invoke('settings:get-all'),
     openFolder: (path: string) => ipcRenderer.invoke('folder:open', path),
     revealFolder: (path: string) => ipcRenderer.invoke('folder:reveal', path)
   },
 
-  // Token auto-detection
+  // Auto-detección de token
   tokenDetector: {
     detect: () => ipcRenderer.invoke('token:detect')
   },
 
-  // Archive viewer
+  // Visor de archivo — solo lectura dentro del directorio de salida
   archive: {
     scanDirectory: (dirPath: string) => ipcRenderer.invoke('archive:scan-directory', dirPath),
     readFile: (filePath: string) => ipcRenderer.invoke('archive:read-file', filePath),
-    readBinaryFile: (path: string) => ipcRenderer.invoke('archive:read-binary-file', path)
+    search: (query: string, limit?: number) => ipcRenderer.invoke('archive:search', query, limit),
+    /** URL archive:// que el protocolo del main resuelve de forma segura. */
+    toUrl: (filePath: string) => `archive://local/${encodeURIComponent(filePath)}`
   },
 
-  // Window controls
+  app: {
+    getStats: () => ipcRenderer.invoke('app:get-stats'),
+    openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url)
+  },
+
+  // Controles de ventana
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
     toggleCompact: () => ipcRenderer.send('window:toggle-compact'),
     close: () => ipcRenderer.send('window:close'),
     setAlwaysOnTop: (value: boolean) => ipcRenderer.send('window:set-always-on-top', value),
-    setZoom: (level: number) => ipcRenderer.send('window:set-zoom', level),
-    onModeChanged: (callback: (mode: string) => void) =>
-      ipcRenderer.on('window-mode-changed', (_e, mode) => callback(mode))
+    /** factor: 1 = 100 %, 1.5 = 150 %. Rango válido 0.8–2.0. */
+    setZoom: (factor: number) => ipcRenderer.send('window:set-zoom', factor),
+    getState: () => ipcRenderer.invoke('window:get-state'),
+    resetState: () => ipcRenderer.invoke('window:reset-state'),
+    onModeChanged: (cb: (mode: string) => void) => subscribe<[string]>('window-mode-changed', cb),
+    onStateChanged: (cb: (state: { maximized: boolean }) => void) =>
+      subscribe<[{ maximized: boolean }]>('window:state', cb)
   }
 }
 

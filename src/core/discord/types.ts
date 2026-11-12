@@ -1,6 +1,5 @@
 // ============================================================
-// Discord API Types — Complete type definitions for all Discord
-// forum-related structures. No mocks, real API shapes.
+// Tipos de la API de Discord — Tipos reales de la API v10 usados por la app.
 // ============================================================
 
 export interface DiscordUser {
@@ -16,8 +15,11 @@ export interface DiscordGuild {
   id: string
   name: string
   icon: string | null
-  owner_id: string
-  member_count?: number
+  owner?: boolean
+  owner_id?: string
+  permissions?: string
+  approximate_member_count?: number
+  premium_tier?: number
 }
 
 export interface DiscordChannel {
@@ -25,14 +27,16 @@ export interface DiscordChannel {
   type: ChannelType
   guild_id?: string
   name?: string
-  topic?: string
+  topic?: string | null
   parent_id?: string | null
+  position?: number
   last_message_id?: string | null
   available_tags?: ForumTag[]
   default_sort_order?: number | null
   default_forum_layout?: number | null
   message_count?: number
   total_message_sent?: number
+  recipients?: DiscordUser[]
 }
 
 export enum ChannelType {
@@ -51,12 +55,34 @@ export enum ChannelType {
   GUILD_MEDIA = 16
 }
 
+/** Canales de los que se puede extraer historial de mensajes. */
+export const MESSAGE_CAPABLE_TYPES: ChannelType[] = [
+  ChannelType.GUILD_TEXT,
+  ChannelType.DM,
+  ChannelType.GROUP_DM,
+  ChannelType.GUILD_ANNOUNCEMENT,
+  ChannelType.PUBLIC_THREAD,
+  ChannelType.PRIVATE_THREAD,
+  ChannelType.ANNOUNCEMENT_THREAD
+]
+
+/** Canales que se navegan como lista de posts (foros y media). */
+export const FORUM_TYPES: ChannelType[] = [ChannelType.GUILD_FORUM, ChannelType.GUILD_MEDIA]
+
+export function isMessageCapable(type: number): boolean {
+  return MESSAGE_CAPABLE_TYPES.includes(type as ChannelType)
+}
+
+export function isForum(type: number): boolean {
+  return FORUM_TYPES.includes(type as ChannelType)
+}
+
 export interface ForumTag {
   id: string
   name: string
-  moderated: boolean
-  emoji_id: string | null
-  emoji_name: string | null
+  moderated?: boolean
+  emoji_id?: string | null
+  emoji_name?: string | null
 }
 
 export interface DiscordThread {
@@ -91,10 +117,10 @@ export interface DiscordMessage {
   content: string
   timestamp: string
   edited_timestamp: string | null
-  tts: boolean
-  mention_everyone: boolean
-  mentions: DiscordUser[]
-  mention_roles: string[]
+  tts?: boolean
+  mention_everyone?: boolean
+  mentions?: DiscordUser[]
+  mention_roles?: string[]
   attachments: DiscordAttachment[]
   embeds: DiscordEmbed[]
   reactions?: DiscordReaction[]
@@ -185,9 +211,9 @@ export interface EmbedField {
 
 export interface DiscordReaction {
   count: number
-  count_details: { burst: number; normal: number }
-  me: boolean
-  me_burst: boolean
+  count_details?: { burst: number; normal: number }
+  me?: boolean
+  me_burst?: boolean
   emoji: ReactionEmoji
 }
 
@@ -222,7 +248,7 @@ export interface DiscordRole {
   permissions: string
 }
 
-// ----- API Response types -----
+// ----- Tipos de respuesta de la API -----
 
 export interface ThreadListResponse {
   threads: DiscordThread[]
@@ -244,7 +270,7 @@ export interface ArchivedThreadsResponse {
   has_more: boolean
 }
 
-// ----- App-level types -----
+// ----- Tipos a nivel de aplicación -----
 
 export interface ForumPost {
   thread: DiscordThread
@@ -271,7 +297,13 @@ export interface DownloadTask {
   retryCount: number
 }
 
-export type DownloadStatus = 'queued' | 'downloading' | 'processing' | 'exporting' | 'done' | 'error' | 'cancelled' | 'paused'
+export type DownloadStatus =
+  | 'queued'
+  | 'downloading'
+  | 'done'
+  | 'error'
+  | 'cancelled'
+  | 'paused'
 
 export interface DownloadProgress {
   phase: 'fetching' | 'downloading_assets' | 'exporting' | 'done'
@@ -282,22 +314,28 @@ export interface DownloadProgress {
   bytesTotal: number
   bytesDownloaded: number
   currentFile?: string
-  speed: number // bytes per second
-  eta: number   // seconds remaining
+  speed: number // bytes por segundo
+  eta: number   // segundos restantes
 }
 
 export interface ExportOptions {
   formats: ExportFormat[]
   outputDir: string
-  folderStructure: 'by-server' | 'flat' | 'by-date' | 'custom'
-  namingPattern: string // e.g. '{num}_{date}_{title}'
-  imageQuality: 'original' | 'compressed'
+  folderStructure: 'by-server' | 'flat' | 'by-date'
+  namingPattern: string
   includeToc: boolean
   threadMode: 'single' | 'separate' | 'both'
   maxFilenameLength: number
   includeAvatars: boolean
   includeStickers: boolean
   includeCustomEmojis: boolean
+  /** Tamaño máximo por adjunto en bytes. 0 = sin límite. */
+  maxFileSize: number
+  /** Conservar el nombre original del adjunto en lugar de un hash. */
+  preserveFilenames: boolean
+  dateFormat: 'YYYY-MM-DD' | 'DD-MM-YYYY' | 'YYYYMMDD'
+  /** quick = salta si no hay cambios, force = reexporta siempre. */
+  syncMode: 'quick' | 'force'
 }
 
 export type ExportFormat = 'markdown' | 'html' | 'json' | 'pdf' | 'epub'
@@ -331,7 +369,7 @@ export interface CachedPostRecord {
   last_synced: string
   last_checked: string
   sync_status: 'synced' | 'outdated' | 'deleted' | 'error'
-  download_path: string
+  download_path: string | null
   file_count: number
   total_size: number
 }
@@ -361,45 +399,39 @@ export interface CachedFileRecord {
   still_valid: boolean
 }
 
-// ----- IPC Channel types -----
+/** Entrada de la cola persistente tal como vive en SQLite. */
+export interface PersistedQueueItem {
+  id: number
+  thread_id: string
+  guild_id: string
+  channel_id: string
+  guild_name: string | null
+  channel_name: string | null
+  thread_name: string | null
+  priority: number
+  status: string
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  retry_count: number
+  export_options: string | null
+}
 
-export interface IpcChannels {
-  // Auth
-  'auth:set-token': (token: string) => Promise<boolean>
-  'auth:get-token': () => Promise<string | null>
-  'auth:validate': () => Promise<DiscordUser | null>
-  'auth:clear': () => Promise<void>
-
-  // Discord browsing
-  'discord:get-guilds': () => Promise<DiscordGuild[]>
-  'discord:get-channels': (guildId: string) => Promise<DiscordChannel[]>
-  'discord:get-forum-threads': (channelId: string, offset?: number) => Promise<ThreadSearchResponse>
-  'discord:get-archived-threads': (channelId: string, before?: string) => Promise<ArchivedThreadsResponse>
-  'discord:get-thread-messages': (threadId: string, before?: string) => Promise<DiscordMessage[]>
-  'discord:get-user': (userId: string) => Promise<DiscordUser>
-  'discord:get-roles': (guildId: string) => Promise<DiscordRole[]>
-
-  // Downloads
-  'download:start': (tasks: DownloadTask[]) => Promise<void>
-  'download:pause': (taskId: string) => Promise<void>
-  'download:resume': (taskId: string) => Promise<void>
-  'download:cancel': (taskId: string) => Promise<void>
-  'download:pause-all': () => Promise<void>
-  'download:resume-all': () => Promise<void>
-  'download:get-queue': () => Promise<DownloadTask[]>
-
-  // Export
-  'export:set-options': (options: ExportOptions) => Promise<void>
-  'export:get-options': () => Promise<ExportOptions>
-  'export:pick-directory': () => Promise<string | null>
-
-  // Cache
-  'cache:check-post': (threadId: string) => Promise<CachedPostRecord | null>
-  'cache:get-outdated': (channelId: string) => Promise<string[]>
-  'cache:clear': (threadId?: string) => Promise<void>
-
-  // Window
-  'window:minimize': () => void
-  'window:toggle-compact': () => void
-  'window:close': () => void
+export interface DownloadHistoryRecord {
+  id: number
+  queue_id: number | null
+  thread_id: string
+  guild_id: string
+  channel_id: string
+  guild_name: string | null
+  channel_name: string | null
+  thread_name: string | null
+  status: string
+  files_count: number
+  total_bytes: number
+  download_path: string | null
+  error_message: string | null
+  started_at: string | null
+  completed_at: string | null
 }

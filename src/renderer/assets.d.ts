@@ -1,5 +1,5 @@
-// Static asset type declarations for Vite bundler
-// Allows TypeScript to understand image/font imports resolved by Vite.
+// Declaraciones de tipos para assets estáticos del bundler de Vite
+// Permite a TypeScript entender las importaciones de imágenes/fuentes resueltas por Vite.
 
 declare module '*.png' {
   const url: string

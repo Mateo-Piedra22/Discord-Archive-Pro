@@ -1,54 +1,58 @@
 // ============================================================
-// Encrypted Store — Token and preferences storage using
-// Electron's safeStorage (Windows DPAPI). Portable.
-// Uses a simple JSON file store (no ESM dependency issues).
+// Store de preferencias + token cifrado con safeStorage (DPAPI).
+// Archivo JSON plano, portable, sin dependencias ESM.
 // ============================================================
 
 import { safeStorage } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import { app } from 'electron'
+import { getDataDir } from './paths'
 
-interface StoreSchema {
+export interface ContentSelectionPrefs {
+  text: boolean
+  images: boolean
+  videos: boolean
+  files: boolean
+  embeds: boolean
+  replies: boolean
+  metadata: boolean
+  customEmojis: boolean
+  stickers: boolean
+  avatars: boolean
+}
+
+export interface StoreSchema {
+  /** Versión del esquema de preferencias para migraciones puntuales. */
+  prefsVersion: number
   encryptedToken: string | null
   windowBounds: { x: number; y: number; width: number; height: number } | null
+  windowMaximized: boolean
   windowMode: 'expanded' | 'compact' | 'minimized'
   alwaysOnTop: boolean
   outputDirectory: string
   lastGuildId: string | null
   lastChannelId: string | null
   exportFormats: string[]
-  folderStructure: string
+  folderStructure: 'by-server' | 'flat' | 'by-date'
   namingPattern: string
-  imageQuality: string
   includeToc: boolean
-  threadMode: string
+  threadMode: 'single' | 'separate' | 'both'
   maxFilenameLength: number
   includeAvatars: boolean
   includeStickers: boolean
   includeCustomEmojis: boolean
-  syncMode: 'quick' | 'deep' | 'full' | 'force'
+  syncMode: 'quick' | 'force'
   maxConcurrent: number
+  /** Bytes. 0 = sin límite. */
   maxFileSize: number
   autoOpenFolder: boolean
   preserveFilenames: boolean
-  contentSelection: {
-    text: boolean
-    images: boolean
-    videos: boolean
-    files: boolean
-    embeds: boolean
-    replies: boolean
-    metadata: boolean
-    customEmojis: boolean
-    stickers: boolean
-    avatars: boolean
-  }
+  dateFormat: 'YYYY-MM-DD' | 'DD-MM-YYYY' | 'YYYYMMDD'
+  contentSelection: ContentSelectionPrefs
   minimizeToTray: boolean
   strictChannelFiltering: boolean
 }
 
-// Simple JSON file store — no ESM issues, portable, reliable
 class JsonStore {
   private data: StoreSchema
   private filePath: string
@@ -90,25 +94,19 @@ class JsonStore {
 
 let store: JsonStore | null = null
 
-function getStorePath(): string {
-  if (app.isPackaged) {
-    return path.join(path.dirname(process.execPath), 'data')
-  }
-  return path.join(app.getAppPath(), 'data')
-}
-
 const DEFAULTS: StoreSchema = {
+  prefsVersion: 3,
   encryptedToken: null,
   windowBounds: null,
+  windowMaximized: false,
   windowMode: 'expanded',
-  alwaysOnTop: true,
+  alwaysOnTop: false,
   outputDirectory: '',
   lastGuildId: null,
   lastChannelId: null,
   exportFormats: ['markdown'],
   folderStructure: 'by-server',
   namingPattern: '{num}_{date}_{title}',
-  imageQuality: 'original',
   includeToc: true,
   threadMode: 'both',
   maxFilenameLength: 80,
@@ -120,6 +118,7 @@ const DEFAULTS: StoreSchema = {
   maxFileSize: 0,
   autoOpenFolder: true,
   preserveFilenames: true,
+  dateFormat: 'YYYY-MM-DD',
   contentSelection: {
     text: true,
     images: true,
@@ -133,13 +132,25 @@ const DEFAULTS: StoreSchema = {
     avatars: false
   },
   minimizeToTray: false,
-  strictChannelFiltering: true
+  strictChannelFiltering: false
 }
 
 export function initStore(): JsonStore {
   if (store) return store
-  const filePath = path.join(getStorePath(), 'preferences.json')
-  store = new JsonStore(filePath, DEFAULTS)
+  store = new JsonStore(path.join(getDataDir(), 'preferences.json'), DEFAULTS)
+
+  // Migración v1/v2 → v3:
+  //  - `alwaysOnTop` venía activado por defecto y la ventana flotaba sobre todo.
+  //  - Los límites guardados podían estar fuera de pantalla (x negativo) y la
+  //    ventana aparecía cortada. Se descartan una vez.
+  const version = (store.get('prefsVersion') as number) || 1
+  if (version < 3) {
+    store.set('alwaysOnTop', false)
+    store.set('windowMaximized', false)
+    store.set('windowBounds', null)
+    store.set('prefsVersion', 3)
+  }
+
   return store
 }
 
@@ -148,28 +159,41 @@ export function getStore(): JsonStore {
   return store
 }
 
-// ----------- Token Management (Encrypted) -----------
+// ----------- Token -----------
+// Formato: "dpapi:<base64>" cuando safeStorage está disponible,
+// "plain:<base64>" como último recurso. El prefijo evita el bug de
+// intentar descifrar con DPAPI un valor guardado en claro (y perder
+// el token silenciosamente en el siguiente arranque).
 
 export function setToken(token: string): void {
   const s = getStore()
   if (safeStorage.isEncryptionAvailable()) {
-    const encrypted = safeStorage.encryptString(token)
-    s.set('encryptedToken', encrypted.toString('base64'))
+    s.set('encryptedToken', `dpapi:${safeStorage.encryptString(token).toString('base64')}`)
   } else {
-    // Fallback: store as-is (less secure but functional)
-    s.set('encryptedToken', Buffer.from(token).toString('base64'))
+    s.set('encryptedToken', `plain:${Buffer.from(token, 'utf-8').toString('base64')}`)
   }
 }
 
 export function getToken(): string | null {
-  const s = getStore()
-  const stored = s.get('encryptedToken')
+  const stored = getStore().get('encryptedToken')
   if (!stored) return null
 
   try {
+    if (stored.startsWith('dpapi:')) {
+      if (!safeStorage.isEncryptionAvailable()) return null
+      return safeStorage.decryptString(Buffer.from(stored.slice(6), 'base64'))
+    }
+    if (stored.startsWith('plain:')) {
+      return Buffer.from(stored.slice(6), 'base64').toString('utf-8')
+    }
+    // Compatibilidad con el formato antiguo (sin prefijo).
     const buffer = Buffer.from(stored, 'base64')
     if (safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(buffer)
+      try {
+        return safeStorage.decryptString(buffer)
+      } catch {
+        return buffer.toString('utf-8')
+      }
     }
     return buffer.toString('utf-8')
   } catch {
@@ -181,7 +205,7 @@ export function clearToken(): void {
   getStore().set('encryptedToken', null)
 }
 
-// ----------- Window State -----------
+// ----------- Ventana -----------
 
 export function getWindowBounds() {
   return getStore().get('windowBounds')
@@ -199,7 +223,15 @@ export function setWindowMode(mode: 'expanded' | 'compact' | 'minimized') {
   getStore().set('windowMode', mode)
 }
 
-// ----------- Preferences -----------
+export function getWindowMaximized(): boolean {
+  return getStore().get('windowMaximized')
+}
+
+export function setWindowMaximized(value: boolean): void {
+  getStore().set('windowMaximized', value)
+}
+
+// ----------- Salida -----------
 
 export function getOutputDirectory(): string {
   return getStore().get('outputDirectory') || ''
@@ -209,35 +241,14 @@ export function setOutputDirectory(dir: string): void {
   getStore().set('outputDirectory', dir)
 }
 
-export function getExportFormats(): string[] {
-  return getStore().get('exportFormats')
-}
+// ----------- Preferencias completas -----------
 
-export function setExportFormats(formats: string[]): void {
-  getStore().set('exportFormats', formats)
-}
-
-export function getContentSelection() {
-  return getStore().get('contentSelection')
-}
-
-export function setContentSelection(selection: StoreSchema['contentSelection']): void {
-  getStore().set('contentSelection', selection)
-}
-
-export function getSyncMode(): string {
-  return getStore().get('syncMode')
-}
-
-export function setSyncMode(mode: 'quick' | 'deep' | 'full' | 'force'): void {
-  getStore().set('syncMode', mode)
-}
-
-export function getAllPreferences(): StoreSchema {
+export function getAllPreferences(): Omit<StoreSchema, 'encryptedToken'> {
   const s = getStore()
   return {
-    encryptedToken: null, // Never expose
+    prefsVersion: s.get('prefsVersion'),
     windowBounds: s.get('windowBounds'),
+    windowMaximized: s.get('windowMaximized'),
     windowMode: s.get('windowMode'),
     alwaysOnTop: s.get('alwaysOnTop'),
     outputDirectory: s.get('outputDirectory'),
@@ -246,7 +257,6 @@ export function getAllPreferences(): StoreSchema {
     exportFormats: s.get('exportFormats'),
     folderStructure: s.get('folderStructure'),
     namingPattern: s.get('namingPattern'),
-    imageQuality: s.get('imageQuality'),
     includeToc: s.get('includeToc'),
     threadMode: s.get('threadMode'),
     maxFilenameLength: s.get('maxFilenameLength'),
@@ -258,6 +268,7 @@ export function getAllPreferences(): StoreSchema {
     maxFileSize: s.get('maxFileSize'),
     autoOpenFolder: s.get('autoOpenFolder'),
     preserveFilenames: s.get('preserveFilenames'),
+    dateFormat: s.get('dateFormat'),
     contentSelection: s.get('contentSelection'),
     minimizeToTray: s.get('minimizeToTray'),
     strictChannelFiltering: s.get('strictChannelFiltering')

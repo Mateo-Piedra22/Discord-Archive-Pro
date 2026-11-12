@@ -1,21 +1,49 @@
 // ============================================================
-// Markdown Generator — Creates perfectly formatted .md files
-// with YAML frontmatter, resolved mentions, and relative
-// asset paths. Generates post.md and thread.md.
+// Generador de Markdown — Crea archivos .md perfectamente formateados
+// con frontmatter YAML, menciones resueltas y rutas de recursos
+// relativas. Genera post.md, thread.md y replies/.
 // ============================================================
 
 import fs from 'fs'
 import path from 'path'
 import { DiscordMarkdownParser } from '../discord/markdown-parser'
-import type { DiscordThread, DiscordMessage, DiscordReaction } from '../discord/types'
+import type {
+  DiscordThread,
+  DiscordMessage,
+  DiscordReaction,
+  ForumTag
+} from '../discord/types'
+
+export type ThreadMode = 'single' | 'separate' | 'both'
+
+/** Qué partes del mensaje se escriben en el export. */
+export interface ContentSelectionOptions {
+  text: boolean
+  embeds: boolean
+  metadata: boolean
+  stickers: boolean
+}
+
+const ALL_CONTENT: ContentSelectionOptions = {
+  text: true,
+  embeds: true,
+  metadata: true,
+  stickers: true
+}
 
 export class MarkdownGenerator {
   private parser: DiscordMarkdownParser
-  private assetMap: Map<string, string> // url -> relative path
+  private assetMap: Map<string, string> // url -> ruta relativa POSIX sin './'
+  private threadMode: ThreadMode
 
-  constructor(parser: DiscordMarkdownParser, assetMap: Map<string, string>) {
+  constructor(
+    parser: DiscordMarkdownParser,
+    assetMap: Map<string, string>,
+    threadMode: ThreadMode = 'both'
+  ) {
     this.parser = parser
     this.assetMap = assetMap
+    this.threadMode = threadMode
   }
 
   async generatePostMarkdown(
@@ -23,14 +51,17 @@ export class MarkdownGenerator {
     messages: DiscordMessage[],
     guildName: string,
     channelName: string,
-    outputDir: string
+    outputDir: string,
+    tags: ForumTag[] = [],
+    selection: ContentSelectionOptions = ALL_CONTENT
   ): Promise<string> {
     const firstMessage = messages[0]
     if (!firstMessage) return ''
 
     const lines: string[] = []
+    const tagNames = this.tagNames(thread, tags)
 
-    // YAML frontmatter
+    // Cabecera YAML (frontmatter)
     lines.push('---')
     lines.push(`title: "${this.escapeYaml(thread.name)}"`)
     lines.push(`author: "${this.escapeYaml(firstMessage.author.global_name || firstMessage.author.username)}"`)
@@ -38,14 +69,18 @@ export class MarkdownGenerator {
     lines.push(`created_at: "${firstMessage.timestamp}"`)
     lines.push(`forum: "${this.escapeYaml(channelName)}"`)
     lines.push(`server: "${this.escapeYaml(guildName)}"`)
-    lines.push(`tags: [${(thread.applied_tags || []).map(t => `"${t}"`).join(', ')}]`)
 
-    if (firstMessage.reactions && firstMessage.reactions.length > 0) {
-      const reactObj = this.reactionsToObj(firstMessage.reactions)
-      lines.push(`reactions: ${JSON.stringify(reactObj)}`)
+    if (selection.metadata) {
+      lines.push(`tags: [${tagNames.map(t => `"${this.escapeYaml(t)}"`).join(', ')}]`)
+
+      if (firstMessage.reactions && firstMessage.reactions.length > 0) {
+        const reactObj = this.reactionsToObj(firstMessage.reactions)
+        lines.push(`reactions: ${JSON.stringify(reactObj)}`)
+      }
+
+      lines.push(`reply_count: ${messages.length - 1}`)
     }
 
-    lines.push(`reply_count: ${messages.length - 1}`)
     lines.push(`pinned: ${firstMessage.pinned}`)
     lines.push(`locked: ${thread.thread_metadata?.locked || false}`)
     lines.push(`archived: ${thread.thread_metadata?.archived || false}`)
@@ -53,21 +88,21 @@ export class MarkdownGenerator {
     lines.push('---')
     lines.push('')
 
-    // Title
+    // Título
     lines.push(`# ${thread.name}`)
     lines.push('')
 
-    // Author info block
+    // Bloque de información del autor
     const authorName = firstMessage.author.global_name || firstMessage.author.username
     const dateStr = this.formatDate(firstMessage.timestamp)
     lines.push(`> **Autor:** ${authorName} · **Fecha:** ${dateStr}  `)
 
-    if (thread.applied_tags && thread.applied_tags.length > 0) {
-      lines.push(`> **Tags:** ${thread.applied_tags.map(t => `\`${t}\``).join(' · ')}  `)
+    if (selection.metadata && tagNames.length > 0) {
+      lines.push(`> **Tags:** ${tagNames.map(t => `\`${t}\``).join(' · ')}  `)
     }
 
-    if (firstMessage.reactions && firstMessage.reactions.length > 0) {
-      const reactStr = this.parser.reactionsToMarkdown(firstMessage.reactions)
+    if (selection.metadata && firstMessage.reactions && firstMessage.reactions.length > 0) {
+      const reactStr = this.parser.reactionsToMarkdown(firstMessage.reactions, this.assetMap)
       lines.push(`> **Reacciones:** ${reactStr}`)
     }
 
@@ -75,12 +110,14 @@ export class MarkdownGenerator {
     lines.push('---')
     lines.push('')
 
-    // Post content
-    const content = await this.processMessageContent(firstMessage)
-    lines.push(content)
-    lines.push('')
+    // Contenido del post
+    const content = await this.processMessageContent(firstMessage, selection)
+    if (content) {
+      lines.push(content)
+      lines.push('')
+    }
 
-    // Attachments inline
+    // Adjuntos inline
     for (const att of firstMessage.attachments) {
       const localPath = this.assetMap.get(att.url) || att.url
       if (content.includes(att.url) || content.includes(localPath)) continue
@@ -93,7 +130,7 @@ export class MarkdownGenerator {
       lines.push('')
     }
 
-    // Attachments table
+    // Tabla de adjuntos
     if (firstMessage.attachments.length > 0) {
       lines.push('## Archivos Adjuntos')
       lines.push('')
@@ -112,15 +149,17 @@ export class MarkdownGenerator {
     }
 
     // Embeds
-    for (const embed of firstMessage.embeds) {
-      lines.push(this.parser.embedToMarkdown(embed))
-      lines.push('')
+    if (selection.embeds) {
+      for (const embed of firstMessage.embeds) {
+        lines.push(this.parser.embedToMarkdown(embed, this.assetMap))
+        lines.push('')
+      }
     }
 
-    // Footer
+    // Pie de página
     lines.push('---')
     lines.push('')
-    lines.push(`*Archivado con Discord Archive Pro — ${this.formatDate(new Date().toISOString())}*`)
+    lines.push(`*Archivado con Estrato — ${this.formatDate(new Date().toISOString())}*`)
 
     const markdown = lines.join('\n')
     const filePath = path.join(outputDir, 'post.md')
@@ -133,100 +172,118 @@ export class MarkdownGenerator {
     messages: DiscordMessage[],
     guildName: string,
     channelName: string,
-    outputDir: string
+    outputDir: string,
+    tags: ForumTag[] = [],
+    selection: ContentSelectionOptions = ALL_CONTENT
   ): Promise<string> {
-    const lines: string[] = []
+    const writesThread = this.threadMode !== 'separate'
+    const writesReplies = this.threadMode !== 'single'
 
-    // YAML frontmatter
-    lines.push('---')
-    lines.push(`title: "${this.escapeYaml(thread.name)}"`)
-    lines.push(`type: "full_thread"`)
-    lines.push(`total_messages: ${messages.length}`)
-    lines.push(`server: "${this.escapeYaml(guildName)}"`)
-    lines.push(`forum: "${this.escapeYaml(channelName)}"`)
-    lines.push(`last_synced: "${new Date().toISOString()}"`)
-    lines.push('---')
-    lines.push('')
+    let threadPath = ''
 
-    lines.push(`# ${thread.name} — Hilo Completo`)
-    lines.push('')
-    lines.push(`> ${messages.length} mensajes en total`)
-    lines.push('')
-    lines.push('---')
-    lines.push('')
+    if (writesThread) {
+      const lines: string[] = []
+      const tagNames = this.tagNames(thread, tags)
 
-    // All messages
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]
-      const isOP = i === 0
-
-      const authorName = msg.author.global_name || msg.author.username
-      const dateStr = this.formatDate(msg.timestamp)
-      const editedStr = msg.edited_timestamp ? ` *(editado: ${this.formatDate(msg.edited_timestamp)})*` : ''
-
-      if (isOP) {
-        lines.push(`## Post Original — ${authorName}`)
-      } else {
-        lines.push(`## Respuesta #${i} — ${authorName}`)
+      // Cabecera YAML (frontmatter)
+      lines.push('---')
+      lines.push(`title: "${this.escapeYaml(thread.name)}"`)
+      lines.push(`type: "full_thread"`)
+      lines.push(`total_messages: ${messages.length}`)
+      lines.push(`server: "${this.escapeYaml(guildName)}"`)
+      lines.push(`forum: "${this.escapeYaml(channelName)}"`)
+      if (selection.metadata) {
+        lines.push(`tags: [${tagNames.map(t => `"${this.escapeYaml(t)}"`).join(', ')}]`)
       }
-
-      lines.push(`> ${dateStr}${editedStr}`)
-      lines.push('')
-
-      const content = await this.processMessageContent(msg)
-      lines.push(content)
-      lines.push('')
-
-      // Attachments inline
-      for (const att of msg.attachments) {
-        const localPath = this.assetMap.get(att.url) || att.url
-        
-        // Skip if this attachment's URL or localPath is already presented in the content
-        if (content.includes(att.url) || content.includes(localPath)) {
-          continue
-        }
-
-        if (att.content_type?.startsWith('image/')) {
-          lines.push(`![${att.filename}](${localPath})`)
-        } else {
-          lines.push(`[Adjunto: ${att.filename}](${localPath}) (${this.formatSize(att.size)})`)
-        }
-        lines.push('')
-      }
-
-      // Embeds
-      for (const embed of msg.embeds) {
-        lines.push(this.parser.embedToMarkdown(embed))
-        lines.push('')
-      }
-
-      // Reactions
-      if (msg.reactions && msg.reactions.length > 0) {
-        lines.push(`> ${this.parser.reactionsToMarkdown(msg.reactions)}`)
-        lines.push('')
-      }
-
-      // Stickers
-      if (msg.sticker_items) {
-        for (const sticker of msg.sticker_items) {
-          lines.push(this.parser.stickerToMarkdown(sticker))
-          lines.push('')
-        }
-      }
-
+      lines.push(`last_synced: "${new Date().toISOString()}"`)
       lines.push('---')
       lines.push('')
+
+      lines.push(`# ${thread.name} — Hilo Completo`)
+      lines.push('')
+      lines.push(`> ${messages.length} mensajes en total`)
+      lines.push('')
+      lines.push('---')
+      lines.push('')
+
+      // Todos los mensajes
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i]
+        const isOP = i === 0
+
+        const authorName = msg.author.global_name || msg.author.username
+        const dateStr = this.formatDate(msg.timestamp)
+        const editedStr = msg.edited_timestamp
+          ? ` *(editado: ${this.formatDate(msg.edited_timestamp)})*`
+          : ''
+
+        if (isOP) {
+          lines.push(`## Post Original — ${authorName}`)
+        } else {
+          lines.push(`## Respuesta #${i} — ${authorName}`)
+        }
+
+        lines.push(`> ${dateStr}${editedStr}`)
+        lines.push('')
+
+        const content = await this.processMessageContent(msg, selection)
+        if (content) {
+          lines.push(content)
+          lines.push('')
+        }
+
+        // Adjuntos inline
+        for (const att of msg.attachments) {
+          const localPath = this.assetMap.get(att.url) || att.url
+
+          // Se omite si la URL de este adjunto o su localPath ya aparecen en el contenido
+          if (content.includes(att.url) || content.includes(localPath)) {
+            continue
+          }
+
+          if (att.content_type?.startsWith('image/')) {
+            lines.push(`![${att.filename}](${localPath})`)
+          } else {
+            lines.push(`[Adjunto: ${att.filename}](${localPath}) (${this.formatSize(att.size)})`)
+          }
+          lines.push('')
+        }
+
+        // Embeds
+        if (selection.embeds) {
+          for (const embed of msg.embeds) {
+            lines.push(this.parser.embedToMarkdown(embed, this.assetMap))
+            lines.push('')
+          }
+        }
+
+        // Reacciones
+        if (selection.metadata && msg.reactions && msg.reactions.length > 0) {
+          lines.push(`> ${this.parser.reactionsToMarkdown(msg.reactions, this.assetMap)}`)
+          lines.push('')
+        }
+
+        // Stickers
+        if (selection.stickers && msg.sticker_items) {
+          for (const sticker of msg.sticker_items) {
+            lines.push(this.parser.stickerToMarkdown(sticker, this.assetMap))
+            lines.push('')
+          }
+        }
+
+        lines.push('---')
+        lines.push('')
+      }
+
+      // Pie de página
+      lines.push(`*Hilo completo archivado con Estrato — ${this.formatDate(new Date().toISOString())}*`)
+
+      threadPath = path.join(outputDir, 'thread.md')
+      fs.writeFileSync(threadPath, lines.join('\n'), 'utf-8')
     }
 
-    // Footer
-    lines.push(`*Hilo completo archivado con Discord Archive Pro — ${this.formatDate(new Date().toISOString())}*`)
-
-    const markdown = lines.join('\n')
-    const filePath = path.join(outputDir, 'thread.md')
-    fs.writeFileSync(filePath, markdown, 'utf-8')
-
-    // Also generate individual reply files if threadMode is 'separate' or 'both'
-    if (messages.length > 1) {
+    // Archivos de respuesta individuales
+    if (writesReplies && messages.length > 1) {
       const repliesDir = path.join(outputDir, 'replies')
       if (!fs.existsSync(repliesDir)) fs.mkdirSync(repliesDir, { recursive: true })
 
@@ -234,16 +291,22 @@ export class MarkdownGenerator {
         const msg = messages[i]
         const num = i.toString().padStart(3, '0')
         const authorSafe = (msg.author.username || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_')
-        const replyContent = await this.generateReplyMarkdown(msg, i)
+        const replyContent = await this.generateReplyMarkdown(msg, i, selection)
         const replyPath = path.join(repliesDir, `${num}_${authorSafe}.md`)
         fs.writeFileSync(replyPath, replyContent, 'utf-8')
       }
     }
 
-    return filePath
+    if (threadPath) return threadPath
+    if (writesReplies) return path.join(outputDir, 'replies')
+    return ''
   }
 
-  private async generateReplyMarkdown(msg: DiscordMessage, index: number): Promise<string> {
+  private async generateReplyMarkdown(
+    msg: DiscordMessage,
+    index: number,
+    selection: ContentSelectionOptions
+  ): Promise<string> {
     const lines: string[] = []
     const authorName = msg.author.global_name || msg.author.username
 
@@ -258,23 +321,22 @@ export class MarkdownGenerator {
     lines.push(`> ${this.formatDate(msg.timestamp)}`)
     lines.push('')
 
-    const content = await this.processMessageContent(msg, true) // true = depth is 1 (replies)
-    lines.push(content)
+    // Este archivo vive en replies/, así que todo asset sube un nivel
+    const content = this.prefixRelative(await this.processMessageContent(msg, selection))
+    if (content) lines.push(content)
 
     for (const att of msg.attachments) {
-      let localPath = this.assetMap.get(att.url) || att.url
-      if (localPath.startsWith('assets/')) {
-        localPath = '../' + localPath // Fix for replies subdir
-      }
+      const rel = this.assetMap.get(att.url)
+      // Ya presente en el cuerpo (como URL original o como ruta relativa)?
+      if (content.includes(att.url)) continue
+      if (rel && (content.includes(rel) || content.includes(this.prefixRelativePath(rel)))) continue
 
-      if (content.includes(att.url) || (this.assetMap.get(att.url) && content.includes(this.assetMap.get(att.url)!))) {
-        continue
-      }
+      const localPath = rel ? this.prefixRelativePath(rel) : att.url
+
+      lines.push('')
       if (att.content_type?.startsWith('image/')) {
-        lines.push('')
         lines.push(`![${att.filename}](${localPath})`)
       } else {
-        lines.push('')
         lines.push(`[Adjunto: ${att.filename}](${localPath}) (${this.formatSize(att.size)})`)
       }
     }
@@ -282,23 +344,27 @@ export class MarkdownGenerator {
     return lines.join('\n')
   }
 
-  private async processMessageContent(msg: DiscordMessage, isReply: boolean = false): Promise<string> {
+  private async processMessageContent(
+    msg: DiscordMessage,
+    selection: ContentSelectionOptions
+  ): Promise<string> {
+    if (!selection.text) return ''
+
     let content = msg.content || ''
 
-    // Parse Discord markdown to standard
-    content = await this.parser.parse(content)
+    // Convierte el markdown de Discord a estándar
+    content = await this.parser.parse(content, this.assetMap)
 
-    // Replace attachment URLs with local paths
+    // Sustituye las URLs de adjuntos por rutas locales
     for (const att of msg.attachments) {
-      const originalPath = this.assetMap.get(att.url)
-      if (originalPath) {
-        const localPath = isReply ? '../' + originalPath : originalPath
-        content = content.replace(att.url, localPath)
-        content = content.replace(att.proxy_url, localPath)
+      const localPath = this.assetMap.get(att.url)
+      if (localPath) {
+        content = content.split(att.url).join(localPath)
+        content = content.split(att.proxy_url).join(localPath)
       }
     }
 
-    // If message is a reply, add reference
+    // Si el mensaje es una respuesta, añade la referencia
     if (msg.referenced_message) {
       const refAuthor = msg.referenced_message.author.global_name || msg.referenced_message.author.username
       const refPreview = (msg.referenced_message.content || '').substring(0, 100)
@@ -306,6 +372,22 @@ export class MarkdownGenerator {
     }
 
     return content
+  }
+
+  /** Añade `../` a los enlaces relativos `assets/...` (archivos dentro de replies/). */
+  private prefixRelative(markdown: string): string {
+    return markdown.replace(/\]\(assets\//g, '](../assets/')
+  }
+
+  /** Ruta del recurso relativa a replies/: `assets/x` → `../assets/x`. */
+  private prefixRelativePath(rel: string): string {
+    return rel.startsWith('assets/') ? `../${rel}` : rel
+  }
+
+  private tagNames(thread: DiscordThread, tags: ForumTag[]): string[] {
+    if (!tags || tags.length === 0) return []
+    const byId = new Map(tags.map(t => [t.id, t.name]))
+    return (thread.applied_tags || []).map(id => byId.get(id) || id)
   }
 
   private reactionsToObj(reactions: DiscordReaction[]): Record<string, number> {
@@ -318,13 +400,18 @@ export class MarkdownGenerator {
   }
 
   private escapeYaml(str: string): string {
-    return str.replace(/"/g, '\\"').replace(/\n/g, ' ')
+    return (str || '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .trim()
   }
 
   private formatDate(isoDate: string): string {
     try {
       const d = new Date(isoDate)
-      return d.toLocaleDateString('es-ES', {
+      if (Number.isNaN(d.getTime())) return isoDate
+      return d.toLocaleString('es-ES', {
         day: 'numeric',
         month: 'long',
         year: 'numeric',
