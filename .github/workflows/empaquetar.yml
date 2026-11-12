@@ -9,6 +9,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 concurrency:
   group: empaquetar-${{ github.ref }}
   cancel-in-progress: true
@@ -21,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -41,7 +44,7 @@ jobs:
         run: npx electron-builder --win portable --publish never
 
       - name: Subir el ejecutable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Estrato-windows
           path: dist/*.exe
