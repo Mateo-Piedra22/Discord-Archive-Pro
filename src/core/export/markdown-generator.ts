@@ -35,15 +35,18 @@ export class MarkdownGenerator {
   private parser: DiscordMarkdownParser
   private assetMap: Map<string, string> // url -> ruta relativa POSIX sin './'
   private threadMode: ThreadMode
+  private includeToc: boolean
 
   constructor(
     parser: DiscordMarkdownParser,
     assetMap: Map<string, string>,
-    threadMode: ThreadMode = 'both'
+    threadMode: ThreadMode = 'both',
+    includeToc: boolean = false
   ) {
     this.parser = parser
     this.assetMap = assetMap
     this.threadMode = threadMode
+    this.includeToc = includeToc
   }
 
   async generatePostMarkdown(
@@ -142,7 +145,8 @@ export class MarkdownGenerator {
         const type = this.getFileType(att.content_type || '', att.filename)
         const size = this.formatSize(att.size)
         const icon = this.getFileEmoji(att.filename)
-        lines.push(`| ${icon} [${att.filename}](${localPath}) | ${type} | ${size} |`)
+        const escapedFilename = att.filename.replace(/\|/g, '\\|')
+        lines.push(`| ${icon} [${escapedFilename}](${localPath}) | ${type} | ${size} |`)
       }
 
       lines.push('')
@@ -163,7 +167,7 @@ export class MarkdownGenerator {
 
     const markdown = lines.join('\n')
     const filePath = path.join(outputDir, 'post.md')
-    fs.writeFileSync(filePath, markdown, 'utf-8')
+    await fs.promises.writeFile(filePath, markdown, 'utf-8')
     return filePath
   }
 
@@ -205,6 +209,23 @@ export class MarkdownGenerator {
       lines.push('')
       lines.push('---')
       lines.push('')
+
+      if (this.includeToc && messages.length > 1) {
+        lines.push('## Tabla de Contenidos')
+        lines.push('')
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i]
+          const authorName = msg.author.global_name || msg.author.username
+          if (i === 0) {
+            lines.push(`- [Post Original — ${authorName}](#post-original)`)
+          } else {
+            lines.push(`- [Respuesta #${i} — ${authorName}](#respuesta-${i})`)
+          }
+        }
+        lines.push('')
+        lines.push('---')
+        lines.push('')
+      }
 
       // Todos los mensajes
       for (let i = 0; i < messages.length; i++) {
@@ -273,33 +294,49 @@ export class MarkdownGenerator {
 
         lines.push('---')
         lines.push('')
+
+        if (i > 0 && i % 100 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
       }
 
       // Pie de página
       lines.push(`*Hilo completo archivado con Estrato — ${this.formatDate(new Date().toISOString())}*`)
 
       threadPath = path.join(outputDir, 'thread.md')
-      fs.writeFileSync(threadPath, lines.join('\n'), 'utf-8')
+      await fs.promises.writeFile(threadPath, lines.join('\n'), 'utf-8')
     }
 
     // Archivos de respuesta individuales
     if (writesReplies && messages.length > 1) {
       const repliesDir = path.join(outputDir, 'replies')
-      if (!fs.existsSync(repliesDir)) fs.mkdirSync(repliesDir, { recursive: true })
-
-      for (let i = 1; i < messages.length; i++) {
-        const msg = messages[i]
-        const num = i.toString().padStart(3, '0')
-        const authorSafe = (msg.author.username || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_')
-        const replyContent = await this.generateReplyMarkdown(msg, i, selection)
-        const replyPath = path.join(repliesDir, `${num}_${authorSafe}.md`)
-        fs.writeFileSync(replyPath, replyContent, 'utf-8')
-      }
+      await this.writeReplies(messages, repliesDir, selection)
     }
 
     if (threadPath) return threadPath
     if (writesReplies) return path.join(outputDir, 'replies')
     return ''
+  }
+
+  private async writeReplies(
+    messages: DiscordMessage[],
+    repliesDir: string,
+    selection: ContentSelectionOptions
+  ): Promise<void> {
+    await fs.promises.mkdir(repliesDir, { recursive: true })
+
+    for (let i = 1; i < messages.length; i++) {
+      const msg = messages[i]
+      const num = i.toString().padStart(3, '0')
+      const authorSafe = (msg.author.username || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_')
+      const replyContent = await this.generateReplyMarkdown(msg, i, selection)
+      const replyPath = path.join(repliesDir, `${num}_${authorSafe}.md`)
+      await fs.promises.writeFile(replyPath, replyContent, 'utf-8')
+
+      if (i % 50 === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
   }
 
   private async generateReplyMarkdown(
@@ -338,6 +375,28 @@ export class MarkdownGenerator {
         lines.push(`![${att.filename}](${localPath})`)
       } else {
         lines.push(`[Adjunto: ${att.filename}](${localPath}) (${this.formatSize(att.size)})`)
+      }
+    }
+
+    // Embeds
+    if (selection.embeds && msg.embeds) {
+      for (const embed of msg.embeds) {
+        lines.push('')
+        lines.push(this.prefixRelative(this.parser.embedToMarkdown(embed, this.assetMap)))
+      }
+    }
+
+    // Reacciones
+    if (selection.metadata && msg.reactions && msg.reactions.length > 0) {
+      lines.push('')
+      lines.push(`> ${this.prefixRelative(this.parser.reactionsToMarkdown(msg.reactions, this.assetMap))}`)
+    }
+
+    // Stickers
+    if (selection.stickers && msg.sticker_items) {
+      for (const sticker of msg.sticker_items) {
+        lines.push('')
+        lines.push(this.prefixRelative(this.parser.stickerToMarkdown(sticker, this.assetMap)))
       }
     }
 

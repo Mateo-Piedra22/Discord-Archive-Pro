@@ -16,10 +16,17 @@ cambio es intencionado: eso hacía que la app pareciera una demo y no una herram
   orden, y se puede leer de arriba abajo. Es lo que hace el producto con un canal.
 - **Lema**: «Archivo vivo de comunidades».
 - **Marca gráfica**: tres estratos apilados, tres capas horizontales que se estrechan
-  hacia abajo. Se generan con `npm run icon` (`scripts/generate-icon.js`), sin
-  dependencias: el `.ico` y los `.png` se escriben a mano desde formas vectoriales.
-- **Paleta de la marca**: tinta `#1a1d22` → `#0d0f12` y tres cobres, `#e0a45c`,
-  `#c9873f` y `#965f2a`. El tono medio es el acento de la interfaz.
+  hacia abajo. Los iconos raster de aplicación (`resources/icon.png`, `icon-512.png`,
+  `icon.ico`) se generan con `npm run icon` (`scripts/generate-icon.js`), sin
+  dependencias externas. Además existen dos activos vectoriales XML 100 % offline
+  (sin `<script>`, enlaces ni fuentes remotas):
+  - `resources/logo-mark.svg` (512×512): isotipo escalable sincronizado con
+    `generate-icon.js`.
+  - `resources/logo-banner.svg` (1200×340): banner editorial (`v2.5 · FLUJO 100% IN-APP`)
+    con píldoras de formatos y visores integrados (`MD · HTML · JSON · CSV · PDF · EPUB · MEDIA`),
+    auditado automáticamente por `validateSvgContent` en `scripts/verify-release.mjs`.
+- **Paleta de la marca**: tinta `#1a1d22` → `#0d0f12` (lienzo `#111316`) y tres
+  cobres, `#e0a45c`, `#c9873f` y `#965f2a`. El tono medio es el acento de la interfaz.
 - **Lockup**: icono + «Estrato» en la barra de título; el nombre solo, en la pantalla
   de acceso; el icono solo, en la cabecera del riel.
 
@@ -65,10 +72,23 @@ ni radios literales**: usa la variable.
 | `--accent-soft` | Fondo de la fila activa en la paleta |
 | `--accent-line` | Resaltado de coincidencias, anillo de foco |
 | `--accent-fg` | Texto sobre acento suave |
+| `--accent-contrast` | Texto o icono contrastado sobre fondo `--accent` |
 | `--ok` / `--warn` / `--err` / `--info` | Semántica de estado |
 
-El tema claro redefine los mismos tokens con `:root[data-theme='light']`. **Ningún
-componente sabe si está en claro u oscuro.**
+Estrato ofrece **tres temas editoriales completos** (`TemaApp = 'dark' | 'light' | 'sepia'`)
+definidos en `tokens.css`:
+
+| Tema (`data-theme`) | Nombre visible | Fondo `--surface-0` | Acento `--accent` | Uso previsto |
+|---|---|---|---|---|
+| `dark` (`:root`) | Tinta oscura | `#0e1116` | `#c9873f` | Lectura nocturna y menor fatiga visual |
+| `light` | Papel claro | `#f6f4ef` | `#a8661f` | Luz de día, contraste cálido tipo papel |
+| `sepia` | Pergamino sepia | `#efe8d8` | `#9c5a1a` | Lectura prolongada de hilos y documentos |
+
+La preferencia persiste en `localStorage` (`ui_theme`) y se sincroniza mediante
+`document.documentElement.dataset.theme`, `<meta name="theme-color">` y el evento
+`dap:theme` entre el conmutador rotatorio del riel (`App.tsx`), los tres chips en
+`SettingsView.tsx` y las acciones directas de `CommandPalette.tsx`. **Ningún
+componente consulta ni ramifica lógica por el tema activo.**
 
 ### Tipografía
 
@@ -106,7 +126,8 @@ Escala: `--text-2xs` (10) · `xs` (11) · `sm` (12) · `md` (13) · `base` (14) 
 - **rail**: seis destinos —Panel, Explorar, Cola, Archivo, Ajustes, Legal— más pie.
   Cada uno tiene su `Ctrl+n` (1–6) en el `title`. El elemento activo tiene una barra
   de 2px a la izquierda y color de acento. El badge numérico de Cola cuenta
-  descargas activas y satura en `99+`. El pie aloja «Buscar» y el conmutador de tema.
+  descargas activas y satura en `99+`. El pie aloja «Buscar» y el conmutador rotatorio
+  entre los tres temas (`Tinta oscura` → `Papel claro` → `Pergamino sepia`).
 - **workspace**: cada vista pinta su `workspace__header` y su `workspace__body`.
   Las vistas con panel lateral usan `.split`.
 
@@ -146,10 +167,47 @@ Todos en `components.css`. Resumen de uso:
 | Métrica | `.metrica`, `__valor`, `__etiqueta` | Cifra mono + rótulo en versalitas |
 | Barra horizontal | `.barra-horizontal`, `__parte` | Reparto por servidor en el panel |
 | Sección | `.section`, `__title` | Bloques del panel |
-| Paleta | `.paleta__campo`, `__lista`, `__item`, `--activo`, `__grupo` | Paleta de comandos y hoja de atajos |
+| Paleta | `.paleta__campo`, `__lista`, `__item`, `--activo`, `__grupo` | Paleta de comandos (con `Archivo reciente`) y hoja de atajos (con buscador) |
+| Notificaciones toast | `.toast-container`, `.toast`, `.toast__action` | Avisos flotantes con botón de acción opcional (`Abrir en visor`, 5 s) |
+| Tarjetas de colección | `.coleccion__formatos`, `.coleccion__formato-tag` | Etiquetas mono de formatos disponibles (`MD`, `HTML`, `JSON`, `CSV`, `PDF`, `EPUB`) |
+| Visor integrado | `.visor__formatos`, `.visor__nav-coleccion`, `.visor__lectura-controles`, `.visor__mark`, `.visor__frame`, `.visor__csv`, `.visor__csv-tabla`, `.visor__json-meta`, `.visor__json-cards`, `.visor__json-card`, `.visor__binario-ficha` | Conmutador raíz `Colecciones` / `Explorador de archivos`, cambio entre formatos/colecciones/respuestas, controles de lectura y búsqueda con resaltado, iframe aislado, tabla CSV copiable, tarjetas JSON, visor de código (>25 lenguajes), vista dual SVG y ficha técnica de binarios |
+| Galería multimedia | `.visor__galeria`, `.galeria__filtro`, `.galeria__item` | Rejilla y filtrado por tipo (imágenes, vídeo y audio) |
 
 Utilidades: `.mono`, `.muted`, `.dim`, `.truncate`, `.row`, `.col`, `.spacer`,
 `.divider`, `.kbd`, `.dot` (+ `--ok`/`--warn`/`--err`/`--busy`).
+
+### Jerarquía del visor todo-en-uno y galería
+
+1. **Conmutador raíz y tarjetas de colección** (`ArchiveViewer.tsx` + `Colecciones.tsx`):
+   en la vista raíz permite alternar entre **Colecciones (N)** (tarjetas con etiquetas
+   `.coleccion__formatos` / `.coleccion__formato-tag`) y **Explorador de archivos**
+   (árbol completo de `outputDir` con buscador y panel de vista previa).
+2. **Navegación de colecciones, pestañas y respuestas** (`.visor__nav-coleccion`): en la
+   cabecera de una colección abierta permite saltar a la colección anterior/siguiente
+   (`Alt+←` / `Alt+→`), cambiar entre *Documento*, *Galería* y *Archivos* con
+   `Alt+1/2/3`, y dentro de la pestaña *Documento* ofrece un selector directo para
+   recorrer `replies/*.md` ordenados numéricamente y regresar al post principal.
+3. **Controles tipográficos y búsqueda interna** (`.visor__lectura-controles` +
+   `.visor__mark`): en `VisorDocumento`, permite buscar dentro del documento con resaltado
+   `<mark>`, filtrar únicamente bloques coincidentes y alternar ancho de columna
+   (`78ch`, `110ch`, `100 %`) y familia tipográfica (`Sans`, `Serif`, `Mono`).
+4. **Barra multi-formato** (`.visor__formatos`): dentro de la pestaña *Documento*, permite
+   saltar entre los formatos generados del mismo hilo (`post.md`, `thread.md`, `index.md`,
+   `post.html`, `post.json`, `post.csv`, `messages.csv`, `export.pdf`, `export.epub`) sin
+   volver al árbol.
+5. **Tabla CSV interactiva** (`.visor__csv` + `.visor__csv-tabla`): cabeceras `thead th`
+   fijas con `position: sticky` en `--surface-2`, botones de ordenación por columna,
+   copia directa de la vista filtrada en RFC 4180, rayado cebra suave (`--surface-1`) y
+   cifras tabulares alineadas.
+6. **Inspector JSON dual, visor de código, SVG y binarios** (`.visor__json-meta`,
+   `.visor__json-cards`, `.visor__binario-ficha`): combina **Vista tarjetas** y **Código
+   JSON**, visor de código para más de 25 extensiones con filtro de líneas y ajuste de
+   línea (`wrapLongLines`), conmutador **Vista imagen** / **Código SVG** y ficha técnica
+   integrada para archivos binarios.
+7. **Lector EPUB sincronizado**: `EpubViewer` adopta automáticamente el tema editorial
+   activo (`dark`, `light`, `sepia`) al abrirse y al escuchar el evento `dap:theme`.
+8. **Galería multimedia** (`.galeria__filtro`): barra superior de chips para filtrar por
+   imágenes, vídeo y audio dentro de la colección abierta.
 
 ---
 

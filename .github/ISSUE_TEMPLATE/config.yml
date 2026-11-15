@@ -1,0 +1,9 @@
+# Configuración del selector de incidencias (Issues) de GitHub para Estrato.
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Reportar vulnerabilidad de seguridad (SECURITY.md)
+    url: https://github.com/estrato-app/estrato/blob/main/SECURITY.md
+    about: Consulta la política de divulgación responsable en SECURITY.md antes de publicar fallos de seguridad.
+  - name: 🏛️ Documentación técnica y arquitectura (docs/ARQUITECTURA.md)
+    url: https://github.com/estrato-app/estrato/blob/main/docs/ARQUITECTURA.md
+    about: Revisa el diseño de procesos, IPC tipado, almacenamiento local y visores integrados en docs/ARQUITECTURA.md.

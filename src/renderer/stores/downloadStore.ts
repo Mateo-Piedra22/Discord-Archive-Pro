@@ -6,6 +6,8 @@ import type {
   ExportOptions
 } from '../../core/discord/types'
 import type { Unsubscribe } from '../../shared/api'
+import { useUiStore } from './uiStore'
+import { showToast } from '../components/Toast'
 
 type DateFormat = ExportOptions['dateFormat']
 type SyncMode = ExportOptions['syncMode']
@@ -48,6 +50,8 @@ interface DownloadState {
   cancelTask: (taskId: string) => void
   cancelAll: () => void
   retryTask: (taskId: string) => void
+  retryAllFailed: () => Promise<number>
+  removeTask: (taskId: string) => Promise<boolean>
   clearCompleted: () => void
   setOutputDir: (dir: string) => void
   setExportFormats: (formats: string[]) => void
@@ -162,6 +166,26 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   resumeAll: () => { void window.api.download.resumeAll() },
   cancelTask: (taskId) => { void window.api.download.cancel(taskId) },
   retryTask: (taskId) => { void window.api.download.retry(taskId) },
+
+  retryAllFailed: async () => {
+    try {
+      const result = await window.api.download.retryAllFailed()
+      return result?.count ?? 0
+    } catch (error) {
+      console.error('Failed to retry failed tasks:', error)
+      return 0
+    }
+  },
+
+  removeTask: async (taskId) => {
+    try {
+      const result = await window.api.download.removeTask(taskId)
+      return Boolean(result?.success)
+    } catch (error) {
+      console.error('Failed to remove task:', error)
+      return false
+    }
+  },
 
   clearCompleted: () => {
     void window.api.download.clearCompleted()
@@ -312,8 +336,17 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       })
 
       const state = get()
-      if (!state.isDownloading && state.autoOpenFolder && state.outputDir) {
-        void window.api.settings.openFolder(state.outputDir)
+      if (!state.isDownloading) {
+        const rutaDestino = task.downloadPath || state.outputDir
+        if (state.autoOpenFolder && rutaDestino) {
+          useUiStore.getState().abrirArchivo(rutaDestino)
+          showToast('Descarga completada · Abierto en el visor integrado', 'success')
+        } else if (!state.autoOpenFolder && task.downloadPath) {
+          showToast(`Descarga completada: ${task.threadName || 'Hilo'}`, 'success', {
+            label: 'Abrir en visor',
+            onClick: () => useUiStore.getState().abrirArchivo(task.downloadPath!)
+          })
+        }
       }
     })
 

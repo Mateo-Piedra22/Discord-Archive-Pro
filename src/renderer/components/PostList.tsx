@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft, ChevronDown, ChevronUp, Paperclip, MessageSquare,
   Lock, Archive, Pin, Image as ImageIcon, Download, X,
-  Search, MessageCircle, Tag, Check, BookOpen
+  Search, MessageCircle, Tag, Check, BookOpen, Copy, FolderCheck
 } from 'lucide-react'
 import { useBrowserStore } from '../stores/browserStore'
 import { useDownloadStore } from '../stores/downloadStore'
@@ -91,10 +91,17 @@ function Metric({ icon, value }: { icon: React.ReactNode; value: number }) {
 
 // ─── Fila + vista previa ──────────────────────────────────────────────────────
 
+interface CachedPostInfo {
+  download_path?: string
+  message_count?: number
+  last_synced?: string
+}
+
 function PostRow({
   post,
   selected,
   expanded,
+  cachedInfo,
   onToggle,
   onExpand,
   onRead
@@ -102,7 +109,8 @@ function PostRow({
   post: ForumPost
   selected: boolean
   expanded: boolean
-  onToggle: () => void
+  cachedInfo?: CachedPostInfo
+  onToggle: (e: React.MouseEvent) => void
   onExpand: () => void
   onRead: () => void
 }) {
@@ -121,13 +129,13 @@ function PostRow({
     <>
       <div
         className={`list__row${selected ? ' list__row--active' : ''}`}
-        onClick={onToggle}
+        onClick={(e) => onToggle(e)}
       >
         <div
           className={`checkbox${selected ? ' checkbox--on' : ''}`}
           role="checkbox"
           aria-checked={selected}
-          onClick={(e) => { e.stopPropagation(); onToggle() }}
+          onClick={(e) => { e.stopPropagation(); onToggle(e) }}
         >
           {selected && <Check size={11} strokeWidth={2.5} />}
         </div>
@@ -139,6 +147,11 @@ function PostRow({
             <span className="list__name truncate">
               {post.thread.name || '(sin título)'}
             </span>
+            {cachedInfo && (
+              <span className="badge badge--ok" title="Ya descargado en el archivo local">
+                En archivo
+              </span>
+            )}
             {post.thread.thread_metadata?.locked && (
               <Lock size={12} strokeWidth={1.8} className="dim" />
             )}
@@ -172,6 +185,22 @@ function PostRow({
             {files > 0 && <Metric icon={<Paperclip size={11} strokeWidth={1.8} />} value={files} />}
           </div>
         </div>
+
+        {cachedInfo?.download_path && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon btn--sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (cachedInfo.download_path) {
+                useUiStore.getState().abrirArchivo(cachedInfo.download_path)
+              }
+            }}
+            title="Abrir copia local en el visor integrado"
+          >
+            <FolderCheck size={15} strokeWidth={1.8} />
+          </button>
+        )}
 
         <button
           className="btn btn--ghost btn--icon btn--sm"
@@ -260,6 +289,30 @@ function PostRow({
   )
 }
 
+const TAMANO_PAGINA_POSTS = 150
+
+type QuickFilter = 'all' | 'attachments' | 'pinned' | 'archived' | 'cached'
+type SortBy = 'date' | 'replies' | 'name' | 'attachments'
+
+function limitarGrupos<T>(
+  grupos: { id: string; name: string; items: T[] }[],
+  maximo: number
+): { visibleGroups: { id: string; name: string; items: T[] }[]; renderedCount: number } {
+  const visibleGroups: { id: string; name: string; items: T[] }[] = []
+  let restantes = maximo
+  let renderedCount = 0
+  for (const grupo of grupos) {
+    if (restantes <= 0) break
+    const porcion = grupo.items.slice(0, restantes)
+    if (porcion.length > 0) {
+      visibleGroups.push({ id: grupo.id, name: grupo.name, items: porcion })
+      restantes -= porcion.length
+      renderedCount += porcion.length
+    }
+  }
+  return { visibleGroups, renderedCount }
+}
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function PostList() {
@@ -273,9 +326,84 @@ export default function PostList() {
   const abrirHilo = useUiStore((s) => s.abrirHilo)
 
   const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all')
   const [previewPost, setPreviewPost] = useState<string | null>(null)
   const [groupByTag, setGroupByTag] = useState(false)
-  const [sortBy, setSortBy] = useState<'date' | 'replies' | 'name'>('date')
+  const [sortBy, setSortBy] = useState<SortBy>('date')
+  const [visibleCount, setVisibleCount] = useState(TAMANO_PAGINA_POSTS)
+  const [cachedMap, setCachedMap] = useState<Map<string, CachedPostInfo>>(() => new Map())
+  const lastClickedIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setVisibleCount(TAMANO_PAGINA_POSTS)
+  }, [selectedChannel?.id, tagFilter, quickFilter, searchQuery, sortBy, groupByTag])
+
+  useEffect(() => {
+    lastClickedIdRef.current = null
+    setQuickFilter('all')
+    setTagFilter(null)
+    setCachedMap(new Map())
+  }, [selectedChannel?.id])
+
+  useEffect(() => {
+    const channelId = selectedChannel?.id
+    if (!channelId) {
+      setCachedMap(new Map())
+      return
+    }
+    let cancelado = false
+    void window.api.cache
+      .getCachedPosts(channelId)
+      .then((rows) => {
+        if (cancelado) return
+        const next = new Map<string, CachedPostInfo>()
+        if (Array.isArray(rows)) {
+          for (const raw of rows) {
+            if (!raw || typeof raw !== 'object') continue
+            const item = raw as {
+              thread_id?: unknown
+              download_path?: unknown
+              message_count?: unknown
+              last_synced?: unknown
+            }
+            if (typeof item.thread_id === 'string' && item.thread_id) {
+              next.set(item.thread_id, {
+                download_path: typeof item.download_path === 'string' ? item.download_path : undefined,
+                message_count: typeof item.message_count === 'number' ? item.message_count : undefined,
+                last_synced: typeof item.last_synced === 'string' ? item.last_synced : undefined
+              })
+            }
+          }
+        }
+        setCachedMap(next)
+      })
+      .catch(() => {
+        if (!cancelado) setCachedMap(new Map())
+      })
+    return () => {
+      cancelado = true
+    }
+  }, [selectedChannel?.id, posts.length])
+
+  const quickCounts = useMemo(() => {
+    let attachments = 0
+    let pinned = 0
+    let archived = 0
+    let cached = 0
+    for (const p of posts) {
+      if ((p.firstMessage?.attachments?.length || 0) > 0) attachments++
+      if (p.firstMessage?.pinned) pinned++
+      if (p.thread.thread_metadata?.archived) archived++
+      if (cachedMap.has(p.thread.id)) cached++
+    }
+    return {
+      all: posts.length,
+      attachments,
+      pinned,
+      archived,
+      cached
+    }
+  }, [posts, cachedMap])
 
   const allTags = useMemo(() => {
     const map = new Map<string, { id: string; name: string; count: number }>()
@@ -290,20 +418,31 @@ export default function PostList() {
   }, [posts])
 
   const filtered = useMemo(() => {
+    const q = searchQuery.toLowerCase()
     let result = posts.filter((p) => {
       if (tagFilter && !p.tags?.some((t) => t.id === tagFilter)) return false
-      if (!searchQuery) return true
-      const q = searchQuery.toLowerCase()
+      if (quickFilter === 'attachments' && (p.firstMessage?.attachments?.length || 0) === 0) return false
+      if (quickFilter === 'pinned' && !p.firstMessage?.pinned) return false
+      if (quickFilter === 'archived' && !p.thread.thread_metadata?.archived) return false
+      if (quickFilter === 'cached' && !cachedMap.has(p.thread.id)) return false
+      if (!q) return true
       return (
         (p.thread.name || '').toLowerCase().includes(q) ||
         (p.firstMessage?.content || '').toLowerCase().includes(q) ||
         (p.firstMessage?.author?.global_name || p.firstMessage?.author?.username || '').toLowerCase().includes(q)
       )
     })
-    if (sortBy === 'replies') result = [...result].sort((a, b) => (b.replyCount || 0) - (a.replyCount || 0))
-    else if (sortBy === 'name') result = [...result].sort((a, b) => (a.thread.name || '').localeCompare(b.thread.name || ''))
+    if (sortBy === 'replies') {
+      result = [...result].sort((a, b) => (b.replyCount || 0) - (a.replyCount || 0))
+    } else if (sortBy === 'attachments') {
+      result = [...result].sort(
+        (a, b) => (b.firstMessage?.attachments?.length || 0) - (a.firstMessage?.attachments?.length || 0)
+      )
+    } else if (sortBy === 'name') {
+      result = [...result].sort((a, b) => (a.thread.name || '').localeCompare(b.thread.name || ''))
+    }
     return result
-  }, [posts, tagFilter, searchQuery, sortBy])
+  }, [posts, tagFilter, quickFilter, searchQuery, sortBy, cachedMap])
 
   const groups = useMemo(() => {
     if (!groupByTag || allTags.length === 0) {
@@ -321,6 +460,20 @@ export default function PostList() {
     return result
   }, [filtered, groupByTag, allTags])
 
+  const { visibleGroups, renderedCount } = useMemo(
+    () => limitarGrupos(groups, visibleCount),
+    [groups, visibleCount]
+  )
+
+  const handleScrollPosts = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (renderedCount >= filtered.length) return
+    const el = e.currentTarget
+    const restante = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (restante < 320) {
+      setVisibleCount((prev) => Math.min(filtered.length, prev + TAMANO_PAGINA_POSTS))
+    }
+  }, [renderedCount, filtered.length])
+
   const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selectedPosts.has(p.thread.id))
 
   const toggleSelectAllFiltered = () => {
@@ -328,6 +481,48 @@ export default function PostList() {
       const has = selectedPosts.has(p.thread.id)
       if (allFilteredSelected ? has : !has) togglePostSelection(p.thread.id)
     })
+  }
+
+  const invertFilteredSelection = () => {
+    filtered.forEach((p) => {
+      togglePostSelection(p.thread.id)
+    })
+  }
+
+  const handlePostToggle = (postId: string, e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      window.getSelection()?.removeAllRanges()
+    }
+    if (e.shiftKey && lastClickedIdRef.current) {
+      const startIdx = filtered.findIndex((p) => p.thread.id === lastClickedIdRef.current)
+      const endIdx = filtered.findIndex((p) => p.thread.id === postId)
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx]
+        for (let i = from; i <= to; i++) {
+          const id = filtered[i].thread.id
+          if (!selectedPosts.has(id)) togglePostSelection(id)
+        }
+        lastClickedIdRef.current = postId
+        return
+      }
+    }
+    togglePostSelection(postId)
+    lastClickedIdRef.current = postId
+  }
+
+  const handleCopySelectedList = async () => {
+    const selected = posts.filter((p) => selectedPosts.has(p.thread.id))
+    if (selected.length === 0) return
+    const text = selected.map((p) => `${p.thread.name || '(sin título)'} — ${p.thread.id}`).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast(
+        `Copiados ${selected.length} ${selected.length === 1 ? 'elemento' : 'elementos'} al portapapeles`,
+        'success'
+      )
+    } catch {
+      showToast('No se pudo copiar la lista al portapapeles', 'error')
+    }
   }
 
   const selectByTag = (tagId: string) => {
@@ -391,7 +586,7 @@ export default function PostList() {
           </div>
         </header>
 
-        <div className="workspace__body">
+        <div className="workspace__body" onScroll={handleScrollPosts}>
           <div className="view-pad">
             <div className="row">
               <span className="muted" style={{ fontSize: 'var(--text-md)' }}>
@@ -458,11 +653,12 @@ export default function PostList() {
             className="select"
             style={{ width: 'auto', height: 30 }}
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'date' | 'replies' | 'name')}
+            onChange={(e) => setSortBy(e.target.value as SortBy)}
             title="Ordenar"
           >
             <option value="date">Por fecha</option>
             <option value="replies">Por respuestas</option>
+            <option value="attachments">Por adjuntos</option>
             <option value="name">Por nombre</option>
           </select>
 
@@ -479,7 +675,7 @@ export default function PostList() {
         </div>
       </header>
 
-      <div className="workspace__body">
+      <div className="workspace__body" onScroll={handleScrollPosts}>
         <div className="view-pad--tight">
           <div className="row">
             <div className="search" style={{ flex: 1 }}>
@@ -499,7 +695,40 @@ export default function PostList() {
             >
               {allFilteredSelected ? 'Deseleccionar' : 'Seleccionar todos'}
             </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={invertFilteredSelection}
+              disabled={filtered.length === 0}
+              title="Invertir la selección sobre los elementos filtrados"
+            >
+              Invertir
+            </button>
           </div>
+
+          {posts.length > 0 && (
+            <div className="row" style={{ flexWrap: 'wrap', marginTop: 'var(--sp-2)' }}>
+              {(
+                [
+                  { key: 'all', label: 'Todos', count: quickCounts.all },
+                  { key: 'cached', label: 'En archivo', count: quickCounts.cached },
+                  { key: 'attachments', label: 'Con adjuntos', count: quickCounts.attachments },
+                  { key: 'pinned', label: 'Fijados', count: quickCounts.pinned },
+                  { key: 'archived', label: 'Archivados', count: quickCounts.archived }
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`chip${quickFilter === item.key ? ' chip--active' : ''}`}
+                  onClick={() =>
+                    setQuickFilter(item.key === 'all' ? 'all' : quickFilter === item.key ? 'all' : item.key)
+                  }
+                >
+                  {item.label} <span className="mono">{item.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {allTags.length > 0 && (
             <div className="row" style={{ flexWrap: 'wrap', marginTop: 'var(--sp-2)' }}>
@@ -535,44 +764,63 @@ export default function PostList() {
                 <Search size={20} strokeWidth={1.8} />
               </div>
               <div className="empty__title">
-                {searchQuery || tagFilter ? 'Sin resultados' : 'Canal vacío'}
+                {searchQuery || tagFilter || quickFilter !== 'all' ? 'Sin resultados' : 'Canal vacío'}
               </div>
               <div className="empty__text">
-                {searchQuery || tagFilter
-                  ? 'Ningún elemento coincide con la búsqueda o el tag seleccionado.'
+                {searchQuery || tagFilter || quickFilter !== 'all'
+                  ? 'Ningún elemento coincide con la búsqueda o los filtros activos.'
                   : 'Este canal no tiene publicaciones para descargar.'}
               </div>
             </div>
           ) : (
-            <div className="list">
-              {groups.map((group) => (
-                <React.Fragment key={group.id}>
-                  {groupByTag && groups.length > 1 && group.name && (
-                    <div className="listmeta">
-                      <span className="truncate">{group.name}</span>
-                      <div className="spacer" />
-                      <span className="mono">{group.items.length}</span>
-                    </div>
-                  )}
-                  {group.items.map((post) => (
-                    <PostRow
-                      key={post.thread.id}
-                      post={post}
-                      selected={selectedPosts.has(post.thread.id)}
-                      expanded={previewPost === post.thread.id}
-                      onToggle={() => togglePostSelection(post.thread.id)}
-                      onExpand={() => setPreviewPost(previewPost === post.thread.id ? null : post.thread.id)}
-                      onRead={() => abrirHilo({
-                        threadId: post.thread.id,
-                        nombre: post.thread.name || 'Hilo',
-                        canal: selectedChannel?.name || '',
-                        servidor: selectedGuild?.name || ''
-                      })}
-                    />
-                  ))}
-                </React.Fragment>
-              ))}
-            </div>
+            <>
+              <div className="list">
+                {visibleGroups.map((group) => (
+                  <React.Fragment key={group.id}>
+                    {groupByTag && visibleGroups.length > 1 && group.name && (
+                      <div className="listmeta">
+                        <span className="truncate">{group.name}</span>
+                        <div className="spacer" />
+                        <span className="mono">{group.items.length}</span>
+                      </div>
+                    )}
+                    {group.items.map((post) => (
+                      <PostRow
+                        key={post.thread.id}
+                        post={post}
+                        selected={selectedPosts.has(post.thread.id)}
+                        expanded={previewPost === post.thread.id}
+                        cachedInfo={cachedMap.get(post.thread.id)}
+                        onToggle={(e) => handlePostToggle(post.thread.id, e)}
+                        onExpand={() => setPreviewPost(previewPost === post.thread.id ? null : post.thread.id)}
+                        onRead={() => abrirHilo({
+                          threadId: post.thread.id,
+                          nombre: post.thread.name || 'Hilo',
+                          canal: selectedChannel?.name || '',
+                          servidor: selectedGuild?.name || ''
+                        })}
+                      />
+                    ))}
+                  </React.Fragment>
+                ))}
+              </div>
+              {renderedCount < filtered.length && (
+                <div className="row" style={{ justifyContent: 'center', padding: 'var(--sp-3) 0' }}>
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setVisibleCount((prev) => Math.min(filtered.length, prev + TAMANO_PAGINA_POSTS))}
+                  >
+                    Cargar más ({renderedCount} de {filtered.length})
+                  </button>
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setVisibleCount(filtered.length)}
+                  >
+                    Mostrar todos
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -582,6 +830,10 @@ export default function PostList() {
           <button className="btn btn--primary" onClick={() => void handleDownload()}>
             <Download size={15} strokeWidth={1.8} />
             Descargar {selectedPosts.size} {selectedPosts.size === 1 ? 'elemento' : 'elementos'}
+          </button>
+          <button className="btn btn--ghost" onClick={() => void handleCopySelectedList()}>
+            <Copy size={15} strokeWidth={1.8} />
+            Copiar lista
           </button>
           <button className="btn btn--ghost" onClick={deselectAllPosts}>
             <X size={15} strokeWidth={1.8} />

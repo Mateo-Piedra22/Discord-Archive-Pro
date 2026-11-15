@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import { MarkdownGenerator } from './markdown-generator'
 import { DiscordMarkdownParser } from '../discord/markdown-parser'
+import { ENDPOINTS } from '../discord/endpoints'
 import { ChannelType } from '../discord/types'
 import type { DiscordMessage, DiscordThread, ForumTag } from '../discord/types'
 
@@ -72,12 +73,17 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-function generator(mode: 'single' | 'separate' | 'both'): MarkdownGenerator {
+function generator(
+  mode: 'single' | 'separate' | 'both',
+  includeToc = false,
+  extraAssets: [string, string][] = []
+): MarkdownGenerator {
   const assetMap = new Map<string, string>([
     [ATTACHMENT.url, 'assets/images/foto.png'],
-    [ATTACHMENT.proxy_url, 'assets/images/foto.png']
+    [ATTACHMENT.proxy_url, 'assets/images/foto.png'],
+    ...extraAssets
   ])
-  return new MarkdownGenerator(new DiscordMarkdownParser(), assetMap, mode)
+  return new MarkdownGenerator(new DiscordMarkdownParser(), assetMap, mode, includeToc)
 }
 
 describe('MarkdownGenerator', () => {
@@ -169,5 +175,158 @@ describe('MarkdownGenerator', () => {
     )
     const content = fs.readFileSync(file, 'utf-8')
     expect(content).not.toContain('CONTENIDO_SECRETO')
+  })
+
+  it('inserta Tabla de Contenidos en thread.md cuando includeToc=true y hay más de 1 mensaje', async () => {
+    const genWithToc = generator('single', true)
+    const replyMsg: DiscordMessage = {
+      ...makeMessage('m2', 'Primera respuesta'),
+      author: {
+        id: 'u2',
+        username: 'bob',
+        discriminator: '0',
+        global_name: 'Bob',
+        avatar: null
+      }
+    }
+
+    const threadFile = await genWithToc.generateThreadMarkdown(
+      thread,
+      [makeMessage('m1', 'Post inicial'), replyMsg],
+      'Servidor',
+      'foro',
+      root,
+      tags
+    )
+    const content = fs.readFileSync(threadFile, 'utf-8')
+
+    expect(content).toContain('## Tabla de Contenidos')
+    expect(content).toContain('- [Post Original — Alice](#post-original)')
+    expect(content).toContain('- [Respuesta #1 — Bob](#respuesta-1)')
+    expect(content.indexOf('## Tabla de Contenidos')).toBeLessThan(
+      content.indexOf('## Post Original — Alice')
+    )
+
+    // Con 1 mensaje o includeToc=false no debe generarse
+    const singleDir = path.join(root, 'single-msg')
+    fs.mkdirSync(singleDir)
+    const singleFile = await genWithToc.generateThreadMarkdown(
+      thread,
+      [makeMessage('m1', 'Solo OP')],
+      'Servidor',
+      'foro',
+      singleDir,
+      tags
+    )
+    expect(fs.readFileSync(singleFile, 'utf-8')).not.toContain('## Tabla de Contenidos')
+
+    const noTocDir = path.join(root, 'no-toc')
+    fs.mkdirSync(noTocDir)
+    const noTocFile = await generator('single', false).generateThreadMarkdown(
+      thread,
+      [makeMessage('m1', 'Post inicial'), replyMsg],
+      'Servidor',
+      'foro',
+      noTocDir,
+      tags
+    )
+    expect(fs.readFileSync(noTocFile, 'utf-8')).not.toContain('## Tabla de Contenidos')
+  })
+
+  it('incluye embeds, reacciones y stickers en replies/ con rutas ../assets/ y respeta selection', async () => {
+    const embedImgUrl = 'https://cdn.discordapp.com/attachments/1/embed.png'
+    const customEmojiUrl = ENDPOINTS.CUSTOM_EMOJI('999', false)
+    const stickerUrl = ENDPOINTS.STICKER('777', 'png')
+
+    const gen = generator('separate', false, [
+      [embedImgUrl, 'assets/images/embed.png'],
+      [customEmojiUrl, 'assets/emojis/999.png'],
+      [stickerUrl, 'assets/stickers/777.png']
+    ])
+
+    const replyWithExtras: DiscordMessage = {
+      ...makeMessage('m2', 'Respuesta enriquecida'),
+      embeds: [
+        {
+          title: 'Doc API',
+          description: 'Descripción del embed',
+          image: { url: embedImgUrl }
+        }
+      ],
+      reactions: [
+        { emoji: { id: '999', name: 'check', animated: false }, count: 4 },
+        { emoji: { id: null, name: '🔥', animated: false }, count: 2 }
+      ],
+      sticker_items: [{ id: '777', name: 'Saludo', format_type: 1 }]
+    }
+
+    await gen.generateThreadMarkdown(
+      thread,
+      [makeMessage('m1', 'OP'), replyWithExtras],
+      'Servidor',
+      'foro',
+      root,
+      tags
+    )
+
+    const replyDir = path.join(root, 'replies')
+    const [replyFilename] = fs.readdirSync(replyDir)
+    const replyContent = fs.readFileSync(path.join(replyDir, replyFilename), 'utf-8')
+
+    expect(replyContent).toContain('> ### Doc API')
+    expect(replyContent).toContain('![embed image](../assets/images/embed.png)')
+    expect(replyContent).toContain('> ![check](../assets/emojis/999.png) 4 · 🔥 2')
+    expect(replyContent).toContain('![Sticker: Saludo](../assets/stickers/777.png)')
+
+    // Respeta selection cuando embeds=false, metadata=false, stickers=false
+    const filteredDir = path.join(root, 'filtered')
+    fs.mkdirSync(filteredDir)
+    await gen.generateThreadMarkdown(
+      thread,
+      [makeMessage('m1', 'OP'), replyWithExtras],
+      'Servidor',
+      'foro',
+      filteredDir,
+      tags,
+      { text: true, embeds: false, metadata: false, stickers: false }
+    )
+    const filteredReplyDir = path.join(filteredDir, 'replies')
+    const [filteredFilename] = fs.readdirSync(filteredReplyDir)
+    const filteredContent = fs.readFileSync(path.join(filteredReplyDir, filteredFilename), 'utf-8')
+
+    expect(filteredContent).toContain('Respuesta enriquecida')
+    expect(filteredContent).not.toContain('Doc API')
+    expect(filteredContent).not.toContain('999.png')
+    expect(filteredContent).not.toContain('Sticker: Saludo')
+  })
+
+  it('escapa caracteres | en nombres de archivo dentro de la tabla Archivos Adjuntos de post.md', async () => {
+    const gen = generator('both')
+    const pipeMsg: DiscordMessage = {
+      ...makeMessage('m1', 'Con pipe'),
+      attachments: [
+        {
+          id: 'a-pipe',
+          filename: 'tabla|v1|final.pdf',
+          content_type: 'application/pdf',
+          size: 2048,
+          url: 'https://cdn.discordapp.com/attachments/1/tabla.pdf',
+          proxy_url: 'https://media.discordapp.net/attachments/1/tabla.pdf'
+        }
+      ]
+    }
+
+    const file = await gen.generatePostMarkdown(
+      thread,
+      [pipeMsg],
+      'Servidor',
+      'foro',
+      root,
+      tags
+    )
+    const content = fs.readFileSync(file, 'utf-8')
+
+    expect(content).toContain('## Archivos Adjuntos')
+    expect(content).toContain('[tabla\\|v1\\|final.pdf](https://cdn.discordapp.com/attachments/1/tabla.pdf)')
   })
 })

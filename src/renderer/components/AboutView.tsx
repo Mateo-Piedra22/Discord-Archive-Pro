@@ -254,8 +254,18 @@ function SeccionResumen() {
       <Parrafo>
         Es una aplicación de escritorio que funciona sin cuenta propia, sin servidor intermedio y sin
         ningún servicio en la nube. Se conecta a Discord con el token de tu cuenta, descarga lo que esa
-        cuenta ya puede ver y lo escribe en la carpeta que elijas. No publica, no reacciona y no
-        modifica nada en la plataforma.
+        cuenta ya puede ver y lo escribe en la carpeta que elijas en seis formatos
+        (<span className="mono">Markdown</span>, <span className="mono">HTML</span>,{' '}
+        <span className="mono">JSON</span>, <span className="mono">CSV</span>,{' '}
+        <span className="mono">PDF</span> y <span className="mono">EPUB</span>) con un flujo autónomo
+        100 % in-app: al completarse la cola se abre directamente en el visor integrado (sin lanzar
+        ventanas externas por su cuenta), incluye visores todo-en-uno (búsqueda interna con resaltado,
+        controles de ancho y tipografía, selector de respuestas <span className="mono">replies/*.md</span>,
+        tarjetas interactivas JSON, tabla CSV copiable, visor de código para más de 25 lenguajes, vista
+        dual SVG, lector EPUB sincronizado y modo <span className="mono">Explorador de archivos</span> raíz),
+        puente directo desde Explorar, Chat de canal, Panel, Cola y Paleta (<span className="mono">En archivo</span>),
+        galería multimedia y tres temas de lectura. No publica, no reacciona y no modifica nada en la
+        plataforma.
       </Parrafo>
 
       <div
@@ -267,7 +277,7 @@ function SeccionResumen() {
       >
         <Garantia cifra="0" texto="Servidores centrales. Nada pasa por infraestructura propia." />
         <Garantia cifra="0" texto="Telemetría, analítica o informe de errores a terceros." />
-        <Garantia cifra="1" texto="Carpeta local: tus archivos, tu disco, tu copia de seguridad." />
+        <Garantia cifra="100 % In-App" texto="Visores integrados (MD, HTML, JSON, CSV, PDF, EPUB, código, SVG y media) y explorador raíz." />
         <Garantia cifra="Solo lectura" texto="Únicamente descarga lo que tu cuenta ya ve." />
       </div>
 
@@ -276,6 +286,10 @@ function SeccionResumen() {
       <div className="col" style={{ gap: 0 }}>
         <Dato etiqueta="Producto" valor="Estrato" />
         <Dato etiqueta="Versión" valor={VERSION} />
+        <Dato etiqueta="Formatos y visores" valor="Markdown, HTML, JSON (tarjetas/código), CSV, PDF, EPUB, SVG, Código (>25) y Media" />
+        <Dato etiqueta="Flujo autónomo" valor="Apertura en visor al terminar, modo Explorador de archivos, buscador en assets/ y puentes in-app" />
+        <Dato etiqueta="Lectura integrada" valor="Buscador interno, ancho (78ch/110ch/100%), Sans/Serif/Mono y replies/" />
+        <Dato etiqueta="Temas de lectura" valor="Tinta oscura, Papel claro y Pergamino sepia (sincronizado con EPUB)" />
         <Dato etiqueta="Licencia del software" valor="Propietaria · uso personal" />
         <Dato etiqueta="Titular" valor={`Estrato, ${ANIO}`} />
         <Dato etiqueta="Plataforma" valor="Windows · Electron + React" />
@@ -542,6 +556,7 @@ function SeccionPrivacidad() {
           <Dato etiqueta="Token de Discord" valor="data/preferences.json · cifrado con DPAPI" />
           <Dato etiqueta="Preferencias y rutas" valor="data/preferences.json · JSON en claro" />
           <Dato etiqueta="Base de datos local" valor="data/estrato.db · SQLite con WAL" />
+          <Dato etiqueta="Preferencias de lectura" valor="localStorage · tema, ancho, tipografía, zoom y filtros" />
           <Dato etiqueta="Archivos exportados" valor="La carpeta de salida que elijas" />
         </div>
         <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
@@ -582,7 +597,9 @@ function SeccionPrivacidad() {
         <Rotulo>Borrar los datos</Rotulo>
         <Parrafo>
           El botón purga la caché de metadatos y el historial de descargas terminadas, y compacta la base.
-          No elimina los documentos ya exportados ni el token guardado.
+          No elimina los documentos ya exportados ni el token guardado. Si necesitas revisar archivos
+          faltantes en disco o liberar memoria sin borrar tu índice, tienes además las herramientas locales
+          de verificación de integridad y optimización de RAM/WAL en Ajustes → Sistema.
         </Parrafo>
         <div className="row" style={{ gap: 'var(--sp-2)' }}>
           <button className="btn btn--ghost btn--sm" onClick={() => void borrarDatos()} disabled={purgando}>
@@ -635,21 +652,31 @@ function SeccionPermisos() {
         </Verificacion>
 
         <Verificacion titulo="Política de seguridad de contenido">
-          En producción se inyecta una CSP que limita los scripts al propio paquete y la red a{' '}
-          <span className="mono">discord.com</span> y su CDN. Sin orígenes externos, sin{' '}
-          <span className="mono">eval</span> y sin objetos incrustados.
+          En producción se inyecta una CSP que limita los scripts al propio paquete (
+          <span className="mono">script-src &apos;self&apos;</span>), los marcos integrados al protocolo local (
+          <span className="mono">frame-src archive:</span>) y la red a <span className="mono">discord.com</span> y su
+          CDN (<span className="mono">cdn.discordapp.com</span>, <span className="mono">media.discordapp.net</span>).
+          Sin orígenes externos, sin <span className="mono">eval</span> y sin objetos incrustados.
         </Verificacion>
 
         <Verificacion titulo="Protocolo archive:// confinado">
-          Las imágenes y los documentos del archivo se sirven por un protocolo propio que valida cada
-          ruta contra la carpeta de salida. Cualquier intento de salir de ella —incluidos enlaces
-          simbólicos— devuelve 403. El HTML archivado se sirve sin scripts.
+          Los archivos y la galería multimedia se sirven por un protocolo propio que valida la ruta real
+          (<span className="mono">isInsideReal</span> e <span className="mono">isInsideRealAsync</span>) contra la
+          carpeta de salida. Cualquier intento de escape —incluidos enlaces simbólicos hacia el exterior—
+          devuelve 403. El HTML archivado se muestra en un <span className="mono">&lt;iframe sandbox=&quot;&quot;&gt;</span>{' '}
+          aislado y sin scripts; los archivos CSV y JSON se analizan en memoria sin evaluación de código ni
+          ejecución de fórmulas.
         </Verificacion>
 
-        <Verificacion titulo="Enlaces externos solo de Discord">
-          Abrir un enlace pasa por una lista blanca: <span className="mono">discord.com</span>,{' '}
-          <span className="mono">discordapp.com</span> y sus dominios de pruebas, además del esquema{' '}
-          <span className="mono">discord:</span>. Cualquier otro destino se descarta.
+        <Verificacion titulo="Enlaces externos bajo lista blanca">
+          Abrir un enlace pasa por una lista blanca en el proceso principal: el esquema{' '}
+          <span className="mono">discord:</span> y destinos <span className="mono">https:</span> de Discord (
+          <span className="mono">discord.com</span>, <span className="mono">discordapp.com</span>,{' '}
+          <span className="mono">ptb.discord.com</span>, <span className="mono">canary.discord.com</span>) más los
+          reproductores de vídeo embebidos (<span className="mono">youtube.com</span>,{' '}
+          <span className="mono">www.youtube.com</span>, <span className="mono">youtu.be</span>,{' '}
+          <span className="mono">vimeo.com</span>, <span className="mono">player.vimeo.com</span>). Cualquier otro
+          destino o protocolo se descarta.
         </Verificacion>
 
         <Verificacion titulo="Sin navegación ni ventanas nuevas">
@@ -815,7 +842,9 @@ function SeccionContacto() {
         <HardDrive size={14} strokeWidth={1.8} style={{ color: 'var(--fg-3)', marginTop: 3 }} aria-hidden="true" />
         <p className="dim" style={{ fontSize: 'var(--text-xs)', lineHeight: 1.6 }}>
           Antes de reportar un fallo de archivado, revisa que la carpeta de salida exista y tenga
-          permisos de escritura; la mayoría de los errores de exportación vienen de ahí.
+          permisos de escritura, y ejecuta la comprobación local en Ajustes → Sistema («Verificar
+          integridad»); la mayoría de las incidencias de exportación vienen de permisos o archivos movidos
+          en disco.
         </p>
       </div>
     </Bloque>
@@ -839,6 +868,7 @@ export default function AboutView() {
           </div>
         </div>
         <div className="workspace__actions">
+          <span className="badge">100 % local</span>
           <span className="badge badge--accent">v{VERSION}</span>
         </div>
       </header>

@@ -1,10 +1,36 @@
 import { useState, type FormEvent } from 'react'
 import {
-  ArrowRight, Eye, EyeOff, KeyRound, Loader2, LogIn, ScanSearch, ShieldCheck
+  ArrowRight, ClipboardPaste, Eye, EyeOff, KeyRound, Loader2, LogIn, ScanSearch, ShieldCheck
 } from 'lucide-react'
 import type { DetectedToken, DetectionDiagnostic } from '../../shared/api'
 import { useAuthStore } from '../stores/authStore'
 import { showToast } from './Toast'
+
+const DISCORD_TOKEN_PATTERN =
+  /^(?:mfa\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/
+
+function stripWrappingQuotes(value: string): string {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    return value.slice(1, -1).trim()
+  }
+  return value
+}
+
+/** Limpia espacios, comillas envolventes y prefijos accidentales (`Bearer ` / `Bot `). */
+export function normalizarTokenEntrada(raw: string): string {
+  let limpio = stripWrappingQuotes(raw.trim())
+  limpio = limpio.replace(/^(?:bearer|bot)\s+/i, '').trim()
+  return stripWrappingQuotes(limpio)
+}
+
+function esFormatoTokenValido(raw: string): boolean {
+  const limpio = normalizarTokenEntrada(raw)
+  return limpio.length > 0 && DISCORD_TOKEN_PATTERN.test(limpio)
+}
 
 /** Punto de estado por fuente: descifrado, encontrado sin descifrar, ausente. */
 function estadoFuente(diagnostico: DetectionDiagnostic): string {
@@ -43,9 +69,27 @@ export default function TokenSetup() {
 
   const enviarManual = async (evento: FormEvent) => {
     evento.preventDefault()
-    const limpio = valor.trim()
+    const limpio = normalizarTokenEntrada(valor)
     if (!limpio) return
     await conectar(limpio)
+  }
+
+  const pegarDesdePortapapeles = async () => {
+    try {
+      if (!navigator.clipboard?.readText) {
+        showToast('No se pudo acceder al portapapeles', 'warning')
+        return
+      }
+      const raw = await navigator.clipboard.readText()
+      const limpio = normalizarTokenEntrada(raw)
+      if (!limpio) {
+        showToast('El portapapeles está vacío', 'warning')
+        return
+      }
+      setValor(limpio)
+    } catch {
+      showToast('No se pudo leer el portapapeles. Pega el token manualmente.', 'error')
+    }
   }
 
   const detectar = async () => {
@@ -257,6 +301,17 @@ export default function TokenSetup() {
                     />
                     <button
                       type="button"
+                      className="btn"
+                      onClick={() => void pegarDesdePortapapeles()}
+                      disabled={ocupado}
+                      title="Pegar desde el portapapeles"
+                      aria-label="Pegar token desde el portapapeles"
+                    >
+                      <ClipboardPaste size={14} strokeWidth={1.8} />
+                      Pegar
+                    </button>
+                    <button
+                      type="button"
                       className="btn btn--icon"
                       onClick={() => setVisible((previo) => !previo)}
                       title={visible ? 'Ocultar token' : 'Mostrar token'}
@@ -265,6 +320,26 @@ export default function TokenSetup() {
                       {visible ? <EyeOff size={15} strokeWidth={1.8} /> : <Eye size={15} strokeWidth={1.8} />}
                     </button>
                   </div>
+                  {valor.trim().length > 0 && (() => {
+                    const formatoValido = esFormatoTokenValido(valor)
+                    return (
+                      <div
+                        className="row"
+                        style={{ gap: 'var(--sp-2)', fontSize: 'var(--text-xs)' }}
+                        role="status"
+                      >
+                        <span
+                          className={`dot ${formatoValido ? 'dot--ok' : 'dot--warn'}`}
+                          aria-hidden="true"
+                        />
+                        <span style={{ color: formatoValido ? 'var(--ok)' : 'var(--warn)' }}>
+                          {formatoValido
+                            ? 'Formato compatible con token de Discord'
+                            : 'El formato no coincide con un token de Discord válido'}
+                        </span>
+                      </div>
+                    )
+                  })()}
                   <span className="field__hint">
                     Se guarda cifrado en este equipo. No se envía a ningún servicio externo.
                   </span>
@@ -273,7 +348,7 @@ export default function TokenSetup() {
                 <button
                   type="submit"
                   className="btn btn--primary btn--block"
-                  disabled={!valor.trim() || ocupado}
+                  disabled={!normalizarTokenEntrada(valor) || ocupado}
                 >
                   {ocupado ? (
                     <>

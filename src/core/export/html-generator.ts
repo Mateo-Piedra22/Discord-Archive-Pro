@@ -6,7 +6,17 @@
 
 import fs from 'fs'
 import path from 'path'
-import type { DiscordThread, DiscordMessage, DiscordReaction } from '../discord/types'
+import { ENDPOINTS } from '../discord/endpoints'
+import type {
+  DiscordEmbed,
+  DiscordMessage,
+  DiscordReaction,
+  DiscordThread,
+  StickerItem
+} from '../discord/types'
+
+const GROUP_WINDOW_MS = 5 * 60 * 1000
+const REPLY_SNIPPET_LIMIT = 90
 
 /** Variables de tema oscuro por defecto; el modo claro las sobreescribe. */
 const BASE_CSS = `
@@ -62,6 +72,8 @@ const BASE_CSS = `
       --text-dim: #747f8d;
       --border: rgba(0,0,0,0.1);
     }
+    #theme:checked ~ .layout .spoiler { background: #c4c9ce; }
+    #theme:checked ~ .layout .spoiler:hover, #theme:checked ~ .layout .spoiler:focus { background: rgba(0,0,0,0.08); }
     .sidebar {
       width: 260px;
       background: var(--sidebar);
@@ -150,6 +162,8 @@ const BASE_CSS = `
     .message-content li { margin: 0.125rem 0; }
     .attachment-container { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
     .attachment-image { max-width: 400px; max-height: 300px; border-radius: 4px; cursor: pointer; display: block; }
+    .attachment-video { max-width: 480px; max-height: 360px; border-radius: 6px; background: #000; display: block; }
+    .attachment-audio { width: 100%; max-width: 400px; display: block; }
     .attachment-file {
       background: var(--card);
       border: 1px solid var(--border);
@@ -165,11 +179,70 @@ const BASE_CSS = `
     .attachment-file-info { flex: 1; min-width: 0; }
     .attachment-file-name { font-size: 0.875rem; font-weight: 500; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .attachment-file-size { font-size: 0.75rem; color: var(--text-muted); }
+    .embed-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      margin-top: 0.5rem;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.375rem;
+    }
+    .embed-body-row { display: flex; gap: 1rem; align-items: flex-start; }
+    .embed-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.375rem; }
+    .embed-author { font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+    .embed-author a { color: inherit; text-decoration: none; }
+    .embed-author a:hover { text-decoration: underline; }
+    .embed-title { font-size: 0.9375rem; font-weight: 600; color: var(--text); }
+    .embed-title a { color: var(--accent); text-decoration: none; }
+    .embed-title a:hover { text-decoration: underline; }
+    .embed-description { font-size: 0.875rem; color: var(--text); line-height: 1.375; word-break: break-word; }
+    .embed-description a { color: var(--accent); text-decoration: none; }
+    .embed-description a:hover { text-decoration: underline; }
+    .embed-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem 0.75rem; margin-top: 0.25rem; }
+    .embed-field { grid-column: 1 / -1; min-width: 0; }
+    .embed-field.embed-field-inline { grid-column: auto; }
+    .embed-field-name { font-size: 0.8125rem; font-weight: 600; color: var(--text); margin-bottom: 0.125rem; }
+    .embed-field-value { font-size: 0.8125rem; color: var(--text-muted); word-break: break-word; }
+    .embed-thumbnail { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+    .embed-image { max-width: 100%; max-height: 300px; border-radius: 4px; margin-top: 0.25rem; display: block; }
+    .embed-footer { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .sticker-container { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+    .sticker-image { width: 120px; height: 120px; object-fit: contain; display: block; }
+    .sticker-badge {
+      display: inline-flex; align-items: center; gap: 0.375rem;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.375rem 0.625rem;
+      font-size: 0.8125rem; color: var(--text-muted);
+    }
+    .spoiler {
+      background: rgba(0,0,0,0.45);
+      color: transparent;
+      border-radius: 3px;
+      padding: 0 0.25rem;
+      cursor: pointer;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .spoiler:hover, .spoiler:focus {
+      color: inherit;
+      background: rgba(255,255,255,0.1);
+      outline: 1px solid var(--accent);
+    }
+    .discord-timestamp {
+      background: rgba(255,255,255,0.08);
+      padding: 0 0.25rem;
+      border-radius: 3px;
+      font-size: 0.9375em;
+    }
     .reactions { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.5rem; }
     .reaction { background: rgba(88,101,242,0.1); border: 1px solid rgba(88,101,242,0.3); border-radius: 8px; padding: 0.25rem 0.5rem; font-size: 0.875rem; display: flex; align-items: center; gap: 0.375rem; color: var(--text); cursor: default; }
     .reaction-count { color: var(--accent); font-weight: 600; font-size: 0.8125rem; }
     blockquote { border-left: 4px solid var(--border); padding: 0 0.75rem; margin: 0.25rem 0; color: var(--text-muted); }
-    .reply-preview { background: transparent; border-left: 2px solid var(--text-dim); padding-left: 0.5rem; margin-bottom: 0.25rem; color: var(--text-muted); font-size: 0.875rem; display: flex; align-items: center; gap: 0.375rem; }
+    .reply-preview { background: transparent; border-left: 2px solid var(--text-dim); padding-left: 0.5rem; margin-bottom: 0.25rem; color: var(--text-muted); font-size: 0.875rem; display: flex; align-items: center; gap: 0.375rem; text-decoration: none; border-radius: 0 4px 4px 0; }
+    .reply-preview:hover { color: var(--text); border-left-color: var(--accent); }
     .reply-preview-author { color: var(--text); font-weight: 600; font-size: 0.875rem; }
     .thread-header {
       padding: 1.5rem 1rem 1rem;
@@ -186,7 +259,24 @@ const BASE_CSS = `
       color: var(--text-dim);
       text-align: center;
     }
-    .footer a { color: var(--accent); text-decoration: none; }`
+    .footer a { color: var(--accent); text-decoration: none; }
+    .sidebar-stat { padding: 0.25rem 1rem; font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-between; }
+    .sidebar-link { display: block; text-decoration: none; }
+    @media (max-width: 720px) {
+      .sidebar { display: none; }
+    }
+    @media print {
+      .theme-btn, .sidebar { display: none !important; }
+      body, .layout, .chat, .messages {
+        background: #ffffff !important;
+        color: #111827 !important;
+        height: auto !important;
+        overflow: visible !important;
+      }
+      .chat-header { position: static !important; border-color: #d1d5db !important; }
+      .message-group { break-inside: avoid; page-break-inside: avoid; }
+      .spoiler { color: #111827 !important; background: #e5e7eb !important; }
+    }`
 
 export class HtmlGenerator {
   private assetMap: Map<string, string>
@@ -210,10 +300,33 @@ export class HtmlGenerator {
       day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'
     })
 
-    let messagesHtml = ''
+    const parts: string[] = []
+    const uniqueAuthors = new Set<string>()
+    let totalAttachments = 0
     for (let i = 0; i < messages.length; i++) {
-      messagesHtml += this.messageToHtml(messages[i], i === 0)
+      const m = messages[i]
+      const prev = i > 0 ? messages[i - 1] : null
+      const prevTime = prev ? Date.parse(prev.timestamp) : NaN
+      const currTime = Date.parse(m.timestamp)
+      const withinWindow =
+        !Number.isNaN(prevTime) &&
+        !Number.isNaN(currTime) &&
+        currTime >= prevTime &&
+        currTime - prevTime <= GROUP_WINDOW_MS
+      const isGrouped =
+        prev !== null &&
+        prev.author.id === m.author.id &&
+        withinWindow &&
+        !m.referenced_message
+
+      uniqueAuthors.add(m.author.id)
+      totalAttachments += m.attachments.length
+      parts.push(this.messageToHtml(m, i === 0, !isGrouped))
+      if (i > 0 && i % 100 === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
     }
+    const messagesHtml = parts.join('')
 
     const html = `<!DOCTYPE html>
 <html lang="es">
@@ -234,7 +347,12 @@ export class HtmlGenerator {
         <div class="sidebar-sub"># ${this.escapeHtml(channelName)}</div>
       </div>
       <div class="sidebar-divider"></div>
-      <div class="sidebar-item">${this.escapeHtml(thread.name)}</div>
+      <a class="sidebar-item sidebar-link" href="#top">${this.escapeHtml(thread.name)}</a>
+      <a class="sidebar-item sidebar-link" href="#end">Ir al final del hilo</a>
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-stat"><span>Mensajes</span><strong>${messages.length}</strong></div>
+      <div class="sidebar-stat"><span>Participantes</span><strong>${uniqueAuthors.size}</strong></div>
+      <div class="sidebar-stat"><span>Adjuntos</span><strong>${totalAttachments}</strong></div>
     </aside>
     <section class="chat">
       <div class="chat-header">
@@ -246,18 +364,19 @@ export class HtmlGenerator {
           <span>${messages.length} mensajes</span>
         </div>
       </div>
-      <div class="thread-header">
-        <div class="thread-header-title">${this.escapeHtml(thread.name)}</div>
-        <div class="thread-header-meta">
-          <span>Autor: <strong>${this.escapeHtml(authorName)}</strong></span>
-          <span>${dateStr}</span>
-          <span>Servidor: ${this.escapeHtml(guildName)}</span>
-          <span>Canal: ${this.escapeHtml(channelName)}</span>
+      <div class="messages" id="top">
+        <div class="thread-header">
+          <div class="thread-header-title">${this.escapeHtml(thread.name)}</div>
+          <div class="thread-header-meta">
+            <span>Autor: <strong>${this.escapeHtml(authorName)}</strong></span>
+            <span>${dateStr}</span>
+            <span>Servidor: ${this.escapeHtml(guildName)}</span>
+            <span>Canal: ${this.escapeHtml(channelName)}</span>
+          </div>
+          <div class="thread-header-divider"></div>
         </div>
-        <div class="thread-header-divider"></div>
-      </div>
-      <div class="messages">
         ${messagesHtml}
+        <div id="end"></div>
       </div>
       <div class="footer">Archivado con <strong>Estrato</strong> &mdash; ${new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
     </section>
@@ -266,41 +385,21 @@ export class HtmlGenerator {
 </html>`
 
     const filePath = path.join(outputDir, 'post.html')
-    fs.writeFileSync(filePath, html, 'utf-8')
+    await fs.promises.writeFile(filePath, html, 'utf-8')
     return filePath
   }
 
-  private messageToHtml(msg: DiscordMessage, isOP: boolean): string {
+  private messageToHtml(msg: DiscordMessage, isOP: boolean, isFirstInGroup = true): string {
     const authorName = msg.author.global_name || msg.author.username
     const dateStr = new Date(msg.timestamp).toLocaleString('es-ES', {
       day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
     })
 
     const contentHtml = this.renderMarkdown(msg.content || '')
-
-    // Imágenes inline
-    let attachmentsHtml = '<div class="attachment-container">'
-    let hasAttachments = false
-    for (const att of msg.attachments) {
-      const localPath = this.assetMap.get(att.url) || att.url
-      if (att.content_type?.startsWith('image/')) {
-        attachmentsHtml += `<img class="attachment-image" src="${this.escapeHtml(localPath)}" alt="${this.escapeHtml(att.filename)}" loading="lazy">`
-        hasAttachments = true
-      } else {
-        const sizeStr = att.size ? this.formatSize(att.size) : ''
-        const icon = this.getFileIcon(att.filename)
-        attachmentsHtml += `<a class="attachment-file" href="${this.escapeHtml(localPath)}" download="${this.escapeHtml(att.filename)}">
-          <span class="attachment-file-icon">${icon}</span>
-          <div class="attachment-file-info">
-            <div class="attachment-file-name">${this.escapeHtml(att.filename)}</div>
-            ${sizeStr ? `<div class="attachment-file-size">${sizeStr}</div>` : ''}
-          </div>
-        </a>`
-        hasAttachments = true
-      }
-    }
-    attachmentsHtml += '</div>'
-    if (!hasAttachments) attachmentsHtml = ''
+    const replyHtml = this.renderReplyPreviewHtml(msg)
+    const attachmentsHtml = this.renderAttachmentsHtml(msg)
+    const embedsHtml = (msg.embeds || []).map((embed) => this.renderEmbedHtml(embed)).join('')
+    const stickersHtml = this.renderStickersHtml(msg.sticker_items)
 
     // Reacciones
     let reactionsHtml = ''
@@ -312,20 +411,218 @@ export class HtmlGenerator {
       reactionsHtml += '</div>'
     }
 
-    return `
-    <div class="message-group first-in-group${isOP ? ' op' : ''}">
-      ${this.avatarHtml(msg)}
-      <div class="message-body">
-        <div class="message-header-row">
+    const editedBadge = msg.edited_timestamp ? '<span class="timestamp-label">(editado)</span>' : ''
+    const groupClasses = ['message-group']
+    if (isFirstInGroup) groupClasses.push('first-in-group')
+    if (isOP) groupClasses.push('op')
+
+    const avatarOrSpacer = isFirstInGroup ? this.avatarHtml(msg) : '<div class="avatar-spacer"></div>'
+    const headerHtml = isFirstInGroup
+      ? `<div class="message-header-row">
           <span class="author-name">${this.escapeHtml(authorName)}</span>
           <span class="timestamp-label">${dateStr}</span>
+          ${editedBadge}
           ${isOP ? '<span class="timestamp-label" style="color:#f0b232">OP</span>' : ''}
-        </div>
-        <div class="message-content">${contentHtml}</div>
+        </div>`
+      : ''
+    const inlineEdited = !isFirstInGroup && editedBadge
+      ? `${contentHtml ? ' ' : ''}${editedBadge}`
+      : ''
+
+    return `
+    <div class="${groupClasses.join(' ')}" id="msg-${this.escapeHtml(msg.id)}">
+      ${avatarOrSpacer}
+      <div class="message-body">
+        ${replyHtml}
+        ${headerHtml}
+        <div class="message-content">${contentHtml}${inlineEdited}</div>
         ${attachmentsHtml}
+        ${embedsHtml}
+        ${stickersHtml}
         ${reactionsHtml}
       </div>
     </div>`
+  }
+
+  private renderReplyPreviewHtml(msg: DiscordMessage): string {
+    const ref = msg.referenced_message
+    if (!ref) return ''
+
+    const refAuthor = ref.author?.global_name || ref.author?.username || 'Usuario'
+    const compact = (ref.content || '').replace(/\s+/g, ' ').trim()
+    let refSnippet = compact
+    if (!refSnippet) {
+      refSnippet = ref.attachments?.length ? `[${ref.attachments.length} adjunto(s)]` : '(mensaje sin texto)'
+    } else if (refSnippet.length > REPLY_SNIPPET_LIMIT) {
+      refSnippet = `${refSnippet.slice(0, REPLY_SNIPPET_LIMIT - 3)}...`
+    }
+
+    return `<a class="reply-preview" href="#msg-${this.escapeHtml(ref.id)}"><span class="reply-preview-author">↳ @${this.escapeHtml(refAuthor)}</span> <span>${this.escapeHtml(refSnippet)}</span></a>`
+  }
+
+  private renderAttachmentsHtml(msg: DiscordMessage): string {
+    if (!msg.attachments || msg.attachments.length === 0) return ''
+
+    const items: string[] = []
+    for (const att of msg.attachments) {
+      const safePath = this.resolveAssetUrl(att.url, att.proxy_url)
+      const ct = (att.content_type || '').toLowerCase()
+      const cleanName = (att.filename || '').split('?')[0].toLowerCase()
+      const ext = path.extname(cleanName)
+
+      if (ct.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp'].includes(ext)) {
+        items.push(`<img class="attachment-image" src="${this.escapeHtml(safePath)}" alt="${this.escapeHtml(att.filename)}" loading="lazy">`)
+      } else if (ct.startsWith('video/') || ['.mp4', '.webm', '.mov', '.mkv'].includes(ext)) {
+        items.push(`<video class="attachment-video" src="${this.escapeHtml(safePath)}" controls preload="metadata"></video>`)
+      } else if (ct.startsWith('audio/') || ['.mp3', '.ogg', '.wav', '.m4a', '.flac', '.opus'].includes(ext)) {
+        items.push(`<audio class="attachment-audio" src="${this.escapeHtml(safePath)}" controls preload="metadata"></audio>`)
+      } else {
+        const sizeStr = att.size ? this.formatSize(att.size) : ''
+        const icon = this.getFileIcon(att.filename)
+        items.push(`<a class="attachment-file" href="${this.escapeHtml(safePath)}" download="${this.escapeHtml(att.filename)}">
+          <span class="attachment-file-icon">${icon}</span>
+          <div class="attachment-file-info">
+            <div class="attachment-file-name">${this.escapeHtml(att.filename)}</div>
+            ${sizeStr ? `<div class="attachment-file-size">${sizeStr}</div>` : ''}
+          </div>
+        </a>`)
+      }
+    }
+
+    return `<div class="attachment-container">${items.join('')}</div>`
+  }
+
+  private renderEmbedHtml(embed: DiscordEmbed): string {
+    const mainParts: string[] = []
+
+    if (embed.author?.name) {
+      const authorUrl = this.isSafeHttpUrl(embed.author.url) ? embed.author.url.trim() : null
+      const authorContent = authorUrl
+        ? `<a href="${this.escapeHtml(authorUrl)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(embed.author.name)}</a>`
+        : this.escapeHtml(embed.author.name)
+      mainParts.push(`<div class="embed-author">${authorContent}</div>`)
+    }
+
+    if (embed.title) {
+      const titleUrl = this.isSafeHttpUrl(embed.url) ? embed.url.trim() : null
+      const titleContent = titleUrl
+        ? `<a href="${this.escapeHtml(titleUrl)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(embed.title)}</a>`
+        : this.escapeHtml(embed.title)
+      mainParts.push(`<div class="embed-title">${titleContent}</div>`)
+    } else if (this.isSafeHttpUrl(embed.url)) {
+      const safeUrl = this.escapeHtml(embed.url.trim())
+      mainParts.push(`<div class="embed-title"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a></div>`)
+    }
+
+    if (embed.description) {
+      mainParts.push(`<div class="embed-description">${this.renderMarkdown(embed.description)}</div>`)
+    }
+
+    if (embed.fields && embed.fields.length > 0) {
+      const fieldsHtml = embed.fields
+        .map((field) => {
+          const cls = field.inline ? 'embed-field embed-field-inline' : 'embed-field'
+          return `<div class="${cls}"><div class="embed-field-name">${this.escapeHtml(field.name)}</div><div class="embed-field-value">${this.renderMarkdown(field.value || '')}</div></div>`
+        })
+        .join('')
+      mainParts.push(`<div class="embed-fields">${fieldsHtml}</div>`)
+    }
+
+    const thumbSrc = embed.thumbnail?.url
+      ? this.resolveAssetUrl(embed.thumbnail.url, embed.thumbnail.proxy_url)
+      : ''
+    const imgSrc = embed.image?.url
+      ? this.resolveAssetUrl(embed.image.url, embed.image.proxy_url)
+      : ''
+
+    const footerItems: string[] = []
+    if (embed.footer?.text) footerItems.push(embed.footer.text)
+    if (embed.timestamp) {
+      const d = new Date(embed.timestamp)
+      if (!Number.isNaN(d.getTime())) {
+        footerItems.push(d.toLocaleString('es-ES', {
+          day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+        }))
+      }
+    }
+    const footerHtml = footerItems.length > 0
+      ? `<div class="embed-footer">${this.escapeHtml(footerItems.join(' · '))}</div>`
+      : ''
+
+    const hasThumb = Boolean(thumbSrc && thumbSrc !== '#')
+    const hasImg = Boolean(imgSrc && imgSrc !== '#')
+    if (mainParts.length === 0 && !hasThumb && !hasImg && !footerHtml) return ''
+
+    const borderStyle = typeof embed.color === 'number' && embed.color > 0
+      ? ` style="border-left-color:#${embed.color.toString(16).padStart(6, '0')}"`
+      : ''
+
+    const bodyRow = hasThumb
+      ? `<div class="embed-body-row"><div class="embed-main">${mainParts.join('')}</div><img class="embed-thumbnail" src="${this.escapeHtml(thumbSrc)}" alt="" loading="lazy"></div>`
+      : mainParts.join('')
+
+    const imageHtml = hasImg
+      ? `<img class="embed-image" src="${this.escapeHtml(imgSrc)}" alt="" loading="lazy">`
+      : ''
+
+    return `<div class="embed-card"${borderStyle}>${bodyRow}${imageHtml}${footerHtml}</div>`
+  }
+
+  private renderStickersHtml(stickers?: StickerItem[]): string {
+    if (!stickers || stickers.length === 0) return ''
+
+    const items = stickers.map((sticker) => {
+      const localPath = this.resolveStickerLocalPath(sticker)
+      if (localPath && sticker.format_type !== 3) {
+        const safeSrc = this.sanitizeUrl(localPath)
+        if (safeSrc !== '#') {
+          return `<img class="sticker-image" src="${this.escapeHtml(safeSrc)}" alt="${this.escapeHtml(sticker.name)}" title="${this.escapeHtml(sticker.name)}" loading="lazy">`
+        }
+      }
+      return `<span class="sticker-badge">Sticker: ${this.escapeHtml(sticker.name)}</span>`
+    })
+
+    return `<div class="sticker-container">${items.join('')}</div>`
+  }
+
+  private resolveStickerLocalPath(sticker: StickerItem): string | undefined {
+    const primaryExt: 'png' | 'gif' | 'json' =
+      sticker.format_type === 4 ? 'gif' : sticker.format_type === 3 ? 'json' : 'png'
+    const candidates = [
+      ENDPOINTS.STICKER(sticker.id, primaryExt),
+      ENDPOINTS.STICKER(sticker.id, 'png'),
+      ENDPOINTS.STICKER(sticker.id, 'gif'),
+      `https://cdn.discordapp.com/stickers/${sticker.id}.${primaryExt}`,
+      `https://cdn.discordapp.com/stickers/${sticker.id}.png`,
+      sticker.id,
+      `sticker:${sticker.id}`
+    ]
+    for (const key of candidates) {
+      const hit = this.assetMap.get(key)
+      if (hit) return hit
+    }
+    return undefined
+  }
+
+  private resolveAssetUrl(url?: string, proxyUrl?: string): string {
+    const resolved =
+      (url ? this.assetMap.get(url) : undefined)
+      || (proxyUrl ? this.assetMap.get(proxyUrl) : undefined)
+      || url
+      || ''
+    return this.sanitizeUrl(resolved)
+  }
+
+  private isSafeHttpUrl(url?: string): url is string {
+    return typeof url === 'string' && /^https?:\/\/\S+$/i.test(url.trim())
+  }
+
+  private sanitizeUrl(url: string): string {
+    const trimmed = (url || '').trim()
+    if (!trimmed) return '#'
+    const compact = trimmed.replace(/[\u0000-\u0020]+/g, '')
+    if (/^(?:javascript|vbscript|data):/i.test(compact)) return '#'
+    return trimmed
   }
 
   /** Emoji de reacción: local si fue descargado, si no el CDN de Discord. */
@@ -335,7 +632,7 @@ export class HtmlGenerator {
     const ext = reaction.emoji.animated ? 'gif' : 'png'
     const url = `https://cdn.discordapp.com/emojis/${reaction.emoji.id}.${ext}`
     const src = this.assetMap.get(url) || url
-    return `<img src="${this.escapeHtml(src)}" alt="" style="width:1.25em;height:1.25em;vertical-align:middle">`
+    return `<img src="${this.escapeHtml(this.sanitizeUrl(src))}" alt="" style="width:1.25em;height:1.25em;vertical-align:middle">`
   }
 
   /** Avatar local si fue descargado; si no, se mantiene la URL del CDN. */
@@ -351,29 +648,38 @@ export class HtmlGenerator {
       || this.assetMap.get(`${base}?size=128`)
     const src = local || `${base}?size=80`
 
-    return `<div class="avatar"><img src="${this.escapeHtml(src)}" alt="" loading="lazy"></div>`
+    return `<div class="avatar"><img src="${this.escapeHtml(this.sanitizeUrl(src))}" alt="" loading="lazy"></div>`
   }
 
   /**
    * Markdown → HTML sobre texto ya escapado. Usa marcadores de posición para que las
-   * pasadas no interfieran entre sí (código, enlaces) y luego los restaura.
+   * pasadas no interfieran entre sí (código, enlaces, timestamps) y luego los restaura.
    */
   private renderMarkdown(raw: string): string {
     const store: string[] = []
     const hold = (html: string): string => `\u0000${store.push(html) - 1}\u0000`
 
-    // Énfasis y enlaces: línea a línea, sobre texto ya escapado
-    const inline = (line: string): string => line
+    const formatStyles = (segment: string): string => segment
+      .replace(/\|\|(.+?)\|\|/g, '<span class="spoiler" tabindex="0">$1</span>')
       .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/__([^_\n]+(?:_(?!_)[^_\n]*)*)__/g, '<u>$1</u>')
       .replace(/~~(.+?)~~/g, '<del>$1</del>')
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) =>
-        hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`))
-      .replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+)/g, (_m, prefix: string, url: string) =>
-        `${prefix}${hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}`)
 
-    let text = this.escapeHtml(raw || '')
+    // Énfasis, spoilers, timestamps y enlaces: línea a línea, sobre texto ya escapado
+    const inline = (line: string): string => {
+      const held = line
+        .replace(/&lt;t:(-?\d+)(?::([tTdDfFR]))?&gt;/g, (_m, unix: string, style?: string) =>
+          hold(`<span class="discord-timestamp">${this.escapeHtml(this.formatDiscordTimestamp(unix, style))}</span>`))
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) =>
+          hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${formatStyles(label)}</a>`))
+        .replace(/(^|[\s(|])(https?:\/\/[^\s<)|\u0000]+)/g, (_m, prefix: string, url: string) =>
+          `${prefix}${hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}`)
+      return formatStyles(held)
+    }
+
+    let text = this.escapeHtml((raw || '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n'))
 
     // 1. Bloques de código cercados
     text = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_m, code: string) =>
@@ -431,8 +737,66 @@ export class HtmlGenerator {
     closeList(); closeQuote()
     text = out.join('')
 
-    // 4. Restaurar marcadores de posición
-    return text.replace(/\u0000(\d+)\u0000/g, (_m, index: string) => store[Number(index)])
+    // 4. Restaurar marcadores de posición (incluyendo anidados)
+    while (/\u0000\d+\u0000/.test(text)) {
+      text = text.replace(/\u0000(\d+)\u0000/g, (_m, index: string) => store[Number(index)] ?? '')
+    }
+    return text
+  }
+
+  private formatDiscordTimestamp(unixSeconds: string, style?: string): string {
+    const numeric = Number(unixSeconds)
+    const date = new Date(numeric * 1000)
+    if (!Number.isFinite(numeric) || Number.isNaN(date.getTime())) {
+      return `<t:${unixSeconds}${style ? `:${style}` : ''}>`
+    }
+
+    const effectiveStyle = style || 'f'
+    if (effectiveStyle === 'R') {
+      return this.formatRelativeEs(date)
+    }
+
+    const optionsMap: Record<string, Intl.DateTimeFormatOptions> = {
+      t: { hour: '2-digit', minute: '2-digit' },
+      T: { hour: '2-digit', minute: '2-digit', second: '2-digit' },
+      d: { day: '2-digit', month: '2-digit', year: 'numeric' },
+      D: { day: 'numeric', month: 'long', year: 'numeric' },
+      f: { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' },
+      F: {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }
+    }
+
+    const opts = optionsMap[effectiveStyle] ?? optionsMap.f
+    try {
+      return date.toLocaleString('es-ES', opts)
+    } catch {
+      return date.toISOString()
+    }
+  }
+
+  private formatRelativeEs(date: Date): string {
+    const diffMs = date.getTime() - Date.now()
+    const absSec = Math.round(Math.abs(diffMs) / 1000)
+    const future = diffMs > 0
+    const wrap = (n: number, unit: string): string => (future ? `en ${n} ${unit}` : `hace ${n} ${unit}`)
+
+    if (absSec < 60) return future ? 'en unos segundos' : 'hace unos segundos'
+    const mins = Math.floor(absSec / 60)
+    if (mins < 60) return wrap(mins, mins === 1 ? 'minuto' : 'minutos')
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return wrap(hours, hours === 1 ? 'hora' : 'horas')
+    const days = Math.floor(hours / 24)
+    if (days < 30) return wrap(days, days === 1 ? 'día' : 'días')
+    const months = Math.floor(days / 30)
+    if (months < 12) return wrap(months, months === 1 ? 'mes' : 'meses')
+    const years = Math.floor(days / 365)
+    return wrap(years, years === 1 ? 'año' : 'años')
   }
 
   private hashColor(id: string): string {

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { LogOut, Minus, Moon, Plus, RotateCw, Sun, Trash2, Undo2 } from 'lucide-react'
+import { BookOpen, Cpu, LogOut, Minus, Moon, Plus, RotateCw, ShieldCheck, Sparkles, Sun, Trash2, Undo2 } from 'lucide-react'
 import { useDownloadStore } from '../stores/downloadStore'
 import { useBrowserStore } from '../stores/browserStore'
 import { useAuthStore } from '../stores/authStore'
+import { useUiStore } from '../stores/uiStore'
 import { showToast } from './Toast'
-import type { DbStats, RateLimiterStats } from '../../shared/api'
+import type { DbStats, ProcessPerfStats, RateLimiterStats } from '../../shared/api'
 
 type Seccion = 'general' | 'export' | 'advanced' | 'system'
 
@@ -19,6 +20,7 @@ const FORMATOS: { id: string; label: string; ext: string }[] = [
   { id: 'markdown', label: 'Markdown', ext: '.md' },
   { id: 'html', label: 'HTML', ext: '.html' },
   { id: 'json', label: 'JSON', ext: '.json' },
+  { id: 'csv', label: 'CSV', ext: '.csv' },
   { id: 'pdf', label: 'PDF', ext: '.pdf' },
   { id: 'epub', label: 'EPUB', ext: '.epub' }
 ]
@@ -48,7 +50,30 @@ const FECHAS: { value: 'YYYY-MM-DD' | 'DD-MM-YYYY' | 'YYYYMMDD'; label: string; 
   { value: 'YYYYMMDD', label: 'Compacto', example: '20261111' }
 ]
 
+type TemaApp = 'dark' | 'light' | 'sepia'
+
 const TEMA_KEY = 'ui_theme'
+
+const TEMAS: { id: TemaApp; label: string; hint: string; icono: typeof Moon }[] = [
+  {
+    id: 'dark',
+    label: 'Tinta oscura',
+    hint: 'Carbón cálido de bajo deslumbramiento.',
+    icono: Moon
+  },
+  {
+    id: 'light',
+    label: 'Papel claro',
+    hint: 'Marfil luminoso para entornos bien iluminados.',
+    icono: Sun
+  },
+  {
+    id: 'sepia',
+    label: 'Pergamino sepia',
+    hint: 'Tono cálido pensado para lectura prolongada.',
+    icono: BookOpen
+  }
+]
 
 const MIN_ZOOM_FACTOR = 0.8
 const MAX_ZOOM_FACTOR = 2
@@ -76,8 +101,12 @@ function readInitialZoomFactor(): number {
   return 1
 }
 
-function readTheme(): 'dark' | 'light' {
-  return localStorage.getItem(TEMA_KEY) === 'light' ? 'light' : 'dark'
+function normalizarTema(valor: string | null | undefined): TemaApp {
+  return valor === 'light' || valor === 'sepia' ? valor : 'dark'
+}
+
+function readTheme(): TemaApp {
+  return normalizarTema(document.documentElement.dataset.theme || localStorage.getItem(TEMA_KEY))
 }
 
 function formatBytes(bytes: number): string {
@@ -130,26 +159,41 @@ export default function SettingsView() {
 
   const [seccion, setSeccion] = useState<Seccion>('general')
   const [zoomFactor, setZoomFactor] = useState<number>(readInitialZoomFactor)
-  const [tema, setTema] = useState<'dark' | 'light'>(readTheme)
+  const [tema, setTema] = useState<TemaApp>(readTheme)
   const [siempreVisible, setSiempreVisible] = useState(false)
   const [dbStats, setDbStats] = useState<DbStats | null>(null)
   const [rateStats, setRateStats] = useState<RateLimiterStats | null>(null)
+  const [perfStats, setPerfStats] = useState<ProcessPerfStats | null>(null)
   const [purgeError, setPurgeError] = useState<string | null>(null)
   const [purging, setPurging] = useState(false)
+  const [optimizing, setOptimizing] = useState(false)
+  const [verificandoIntegridad, setVerificandoIntegridad] = useState(false)
 
   // Estado real de la ventana: el interruptor debe reflejar lo que dice el main.
   useEffect(() => {
     void window.api.window.getState().then((estado) => setSiempreVisible(estado.alwaysOnTop))
   }, [])
 
+  // Mantiene sincronizado el selector si el tema cambia desde el riel o la paleta.
+  useEffect(() => {
+    const alCambiarTema = (evento: Event) => {
+      const siguiente = normalizarTema((evento as CustomEvent<string>).detail)
+      setTema((actual) => (actual === siguiente ? actual : siguiente))
+    }
+    window.addEventListener('dap:theme', alCambiarTema)
+    return () => window.removeEventListener('dap:theme', alCambiarTema)
+  }, [])
+
   const loadStats = useCallback(async () => {
     try {
-      const [db, rate] = await Promise.all([
+      const [db, rate, perf] = await Promise.all([
         window.api.settings.getDbStats(),
-        window.api.settings.getRateLimiterStats()
+        window.api.settings.getRateLimiterStats(),
+        window.api.app.getPerfStats()
       ])
       setDbStats(db)
       setRateStats(rate)
+      setPerfStats(perf)
     } catch (error) {
       console.error('No se pudieron leer las estadísticas:', error)
     }
@@ -161,7 +205,7 @@ export default function SettingsView() {
     // No consultamos la BD con la ventana oculta o minimizada.
     const timer = setInterval(() => {
       if (!document.hidden) void loadStats()
-    }, 5000)
+    }, 2500)
     return () => clearInterval(timer)
   }, [seccion, loadStats])
 
@@ -172,11 +216,11 @@ export default function SettingsView() {
     window.api.window.setZoom(next)
   }
 
-  const alternarTema = () => {
-    const next = tema === 'dark' ? 'light' : 'dark'
+  const seleccionarTema = (next: TemaApp) => {
     setTema(next)
     localStorage.setItem(TEMA_KEY, next)
     document.documentElement.dataset.theme = next
+    window.dispatchEvent(new CustomEvent<TemaApp>('dap:theme', { detail: next }))
   }
 
   const restablecerVentana = async () => {
@@ -197,6 +241,55 @@ export default function SettingsView() {
       return
     }
     setExportFormats([...exportFormats, id])
+  }
+
+  const optimizarMemoria = async () => {
+    setOptimizing(true)
+    try {
+      const res = await window.api.app.optimizeMemory()
+      const ahorroHeap = Math.max(0, res.heapBeforeBytes - res.heapAfterBytes)
+      const ahorroWal = Math.max(0, res.walBeforeBytes - res.walAfterBytes)
+      const partes = [`${res.cachesCleared} entradas de caché liberadas`]
+      if (ahorroHeap > 0) partes.push(`Heap −${formatBytes(ahorroHeap)}`)
+      if (ahorroWal > 0) partes.push(`WAL −${formatBytes(ahorroWal)}`)
+      showToast(`Memoria optimizada: ${partes.join(' · ')}`, 'success')
+      void loadStats()
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'No se pudo optimizar la memoria',
+        'error'
+      )
+    } finally {
+      setOptimizing(false)
+    }
+  }
+
+  const verificarIntegridad = async () => {
+    setVerificandoIntegridad(true)
+    try {
+      const res = await window.api.cache.verifyIntegrity()
+      const detalleInvalidados =
+        res.invalidatedFiles > 0 ? ` (${numero(res.invalidatedFiles)} invalidados)` : ''
+      if (res.integrityOk) {
+        showToast(
+          `Integridad OK · ${numero(res.checkedFiles)} archivos verificados${detalleInvalidados}, ${numero(res.orphanPosts)} huérfanos reparados`,
+          'success'
+        )
+      } else {
+        showToast(
+          `Alerta de integridad en la base de datos · ${numero(res.checkedFiles)} archivos verificados${detalleInvalidados}, ${numero(res.orphanPosts)} huérfanos reparados`,
+          'warning'
+        )
+      }
+      void loadStats()
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'No se pudo verificar la integridad de la caché',
+        'error'
+      )
+    } finally {
+      setVerificandoIntegridad(false)
+    }
   }
 
   const purgarCache = async () => {
@@ -258,7 +351,21 @@ export default function SettingsView() {
                         {outputDir || 'Sin definir'}
                       </div>
                     </div>
-                    <span className="btn btn--sm">Cambiar</span>
+                    <div className="row" style={{ gap: 'var(--sp-2)' }}>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        disabled={!outputDir}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          useUiStore.getState().setVista('archivo')
+                        }}
+                      >
+                        <BookOpen size={14} strokeWidth={1.8} />
+                        Ver en visor
+                      </button>
+                      <span className="btn btn--sm">Cambiar</span>
+                    </div>
                   </div>
                 </div>
 
@@ -293,21 +400,38 @@ export default function SettingsView() {
                     </div>
                   </div>
 
-                  <div className="setting-row">
+                  <div className="setting-row" style={{ cursor: 'default' }}>
                     <div>
                       <div className="setting-row__label">Tema</div>
                       <div className="setting-row__hint">
-                        {tema === 'dark' ? 'Tinta oscura' : 'Papel claro'}
+                        {TEMAS.find((item) => item.id === tema)?.hint}
                       </div>
                     </div>
-                    <button className="btn btn--sm" onClick={alternarTema}>
-                      {tema === 'dark' ? (
-                        <Sun size={14} strokeWidth={1.8} />
-                      ) : (
-                        <Moon size={14} strokeWidth={1.8} />
-                      )}
-                      {tema === 'dark' ? 'Claro' : 'Oscuro'}
-                    </button>
+                    <div
+                      className="row"
+                      role="radiogroup"
+                      aria-label="Tema de la interfaz"
+                      style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}
+                    >
+                      {TEMAS.map((item) => {
+                        const Icono = item.icono
+                        const activo = tema === item.id
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={activo}
+                            className={`chip${activo ? ' chip--active' : ''}`}
+                            onClick={() => seleccionarTema(item.id)}
+                            title={item.hint}
+                          >
+                            <Icono size={13} strokeWidth={1.8} />
+                            {item.label}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
 
                   <div className="setting-row" onClick={() => setMinimizeToTray(!minimizeToTray)}>
@@ -588,9 +712,9 @@ export default function SettingsView() {
                     onClick={() => setAutoOpenFolder(!autoOpenFolder)}
                   >
                     <div>
-                      <div className="setting-row__label">Abrir carpeta al terminar</div>
+                      <div className="setting-row__label">Abrir en el visor integrado al terminar</div>
                       <div className="setting-row__hint">
-                        Abre el explorador en la carpeta de salida al completar la cola.
+                        Abre automáticamente la colección recién descargada dentro de la aplicación al completarse la cola.
                       </div>
                     </div>
                     <span className={`switch${autoOpenFolder ? ' switch--on' : ''}`} />
@@ -629,8 +753,96 @@ export default function SettingsView() {
               <div className="section">
                 <div className="card">
                   <div className="card__header">
+                    <Cpu size={15} strokeWidth={1.8} />
+                    <span className="card__title">Rendimiento en vivo</span>
+                    <span className="spacer" />
+                    <span className="badge badge--accent mono">
+                      {perfStats ? `${perfStats.cpuPercent.toFixed(1)} % CPU` : '—'}
+                    </span>
+                    <button
+                      className="btn btn--ghost btn--sm btn--icon"
+                      title="Actualizar telemetría"
+                      onClick={() => void loadStats()}
+                    >
+                      <RotateCw size={14} strokeWidth={1.8} />
+                    </button>
+                  </div>
+                  {perfStats && perfStats.rssBytes > 0 && (
+                    <div style={{ padding: '0 var(--sp-4) var(--sp-3)' }}>
+                      <div className="barra-proporcion" title="Distribución aproximada de memoria RSS">
+                        <div
+                          className="barra-proporcion__seg"
+                          style={{
+                            width: `${Math.min(100, Math.round((perfStats.heapUsedBytes / perfStats.rssBytes) * 100))}%`,
+                            background: 'var(--accent)'
+                          }}
+                        />
+                        <div
+                          className="barra-proporcion__seg"
+                          style={{
+                            width: `${Math.min(100, Math.round((perfStats.externalBytes / perfStats.rssBytes) * 100))}%`,
+                            background: 'var(--warn)'
+                          }}
+                        />
+                      </div>
+                      <div className="row dim" style={{ fontSize: 'var(--text-2xs)', marginTop: 6, gap: 12 }}>
+                        <span>Heap V8: {formatBytes(perfStats.heapUsedBytes)} / {formatBytes(perfStats.heapTotalBytes)}</span>
+                        <span>Nativo: {formatBytes(perfStats.externalBytes)}</span>
+                        <span className="spacer" />
+                        <span>Libre SO: {formatBytes(perfStats.systemFreeBytes)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <table className="table">
+                    <tbody>
+                      <tr>
+                        <td className="muted">Memoria residente (RSS)</td>
+                        <td className="mono">{perfStats ? formatBytes(perfStats.rssBytes) : '—'}</td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Caché LRU de usuarios</td>
+                        <td className="mono">
+                          {perfStats
+                            ? `${numero(perfStats.caches.usersSize)} / ${numero(perfStats.caches.usersCapacity)}`
+                            : '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Caché LRU de canales</td>
+                        <td className="mono">
+                          {perfStats
+                            ? `${numero(perfStats.caches.channelsSize)} / ${numero(perfStats.caches.channelsCapacity)}`
+                            : '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Archivo WAL SQLite</td>
+                        <td className="mono">
+                          {perfStats ? formatBytes(perfStats.db.walSizeBytes ?? 0) : '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="muted">Tiempo activo del proceso</td>
+                        <td className="mono">
+                          {perfStats ? `${numero(perfStats.uptimeSeconds)} s` : '—'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="card">
+                  <div className="card__header">
                     <span className="card__title">Base de datos local</span>
                     <span className="spacer" />
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => void verificarIntegridad()}
+                      disabled={verificandoIntegridad}
+                    >
+                      <ShieldCheck size={14} strokeWidth={1.8} />
+                      {verificandoIntegridad ? 'Verificando…' : 'Verificar integridad'}
+                    </button>
                     <button
                       className="btn btn--ghost btn--sm btn--icon"
                       title="Actualizar"
@@ -654,8 +866,12 @@ export default function SettingsView() {
                         <td className="mono">{numero(dbStats?.totalFiles)}</td>
                       </tr>
                       <tr>
-                        <td className="muted">Tamaño total</td>
-                        <td className="mono">{dbStats ? formatBytes(dbStats.totalSize) : '—'}</td>
+                        <td className="muted">Tamaño de adjuntos / BD</td>
+                        <td className="mono">
+                          {dbStats
+                            ? `${formatBytes(dbStats.totalSize)} · ${formatBytes(dbStats.dbSizeBytes ?? 0)} BD`
+                            : '—'}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
@@ -699,7 +915,26 @@ export default function SettingsView() {
                   <div className="card__header">
                     <span className="card__title">Mantenimiento</span>
                   </div>
-                  <div className="card__body">
+                  <div className="card__body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+                    <div className="row">
+                      <div className="col">
+                        <div className="setting-row__label">Optimizar memoria y caché</div>
+                        <div className="setting-row__hint">
+                          Vacía las cachés LRU de API, compacta el registro WAL de SQLite y libera
+                          páginas no utilizadas.
+                        </div>
+                      </div>
+                      <span className="spacer" />
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => void optimizarMemoria()}
+                        disabled={optimizing}
+                      >
+                        <Sparkles size={14} strokeWidth={1.8} />
+                        {optimizing ? 'Optimizando…' : 'Optimizar ahora'}
+                      </button>
+                    </div>
+                    <hr className="divider" />
                     <div className="row">
                       <div className="col">
                         <div className="setting-row__label">Purgar caché de metadatos</div>

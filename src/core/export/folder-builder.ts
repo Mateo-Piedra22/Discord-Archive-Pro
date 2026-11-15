@@ -11,6 +11,9 @@ import type { ExportOptions } from '../discord/types'
 /** Margen seguro para MAX_PATH de Windows (260 menos el nombre de archivo). */
 const MAX_FULL_PATH = 240
 
+/** Nombres de dispositivo reservados en Windows (insensible a mayúsculas, con o sin extensión). */
+const WINDOWS_RESERVED_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+
 export class FolderBuilder {
   private options: ExportOptions
 
@@ -62,7 +65,10 @@ export class FolderBuilder {
     let num = this.nextNumber(parentDir)
 
     for (let attempt = 0; attempt < 5000; attempt++) {
-      let dirName = this.buildDirName(usesNumber ? num : null, date, title, parentDir)
+      let dirName = this.buildDirName(usesNumber ? num : null, date, title, parentDir, {
+        server: guildName,
+        channel: channelName
+      })
 
       // Sin {num} el nombre sería idéntico en cada intento: hace falta sufijo.
       if (!usesNumber && attempt > 0) {
@@ -85,16 +91,29 @@ export class FolderBuilder {
   }
 
   sanitizeDirName(name: string): string {
+    // Prefija antes de sanitize-filename para conservar nombres reservados legibles ("_CON" en vez de "_").
+    let pre = name.replace(/^[. ]+|[. ]+$/g, '').trim()
+    if (WINDOWS_RESERVED_RE.test(pre)) {
+      pre = `_${pre}`
+    }
+
     // Se usa un saneado robusto para compatibilidad con Windows/POSIX
-    let safe = sanitize(name, { replacement: '_' })
+    let safe = sanitize(pre || name, { replacement: '_' })
 
     // Windows rechaza especialmente puntos/espacios al inicio o al final y ciertos nombres
     safe = safe.replace(/^[. ]+|[. ]+$/g, '').trim()
 
+    if (WINDOWS_RESERVED_RE.test(safe)) {
+      safe = `_${safe}`
+    }
+
     if (safe.length > this.options.maxFilenameLength) {
       safe = safe.substring(0, this.options.maxFilenameLength)
-      // Tras truncar puede quedar un punto/espacio final (Windows lo rechaza)
+      // Tras truncar puede quedar un punto/espacio final o formarse un nombre reservado
       safe = safe.replace(/[. ]+$/g, '').trim()
+      if (WINDOWS_RESERVED_RE.test(safe)) {
+        safe = `_${safe}`.substring(0, this.options.maxFilenameLength).replace(/[. ]+$/g, '').trim()
+      }
     }
 
     if (!safe) safe = 'unnamed'
@@ -133,13 +152,28 @@ export class FolderBuilder {
     return max + 1
   }
 
-  private buildDirName(num: number | null, date: string, title: string, parentDir: string): string {
+  private buildDirName(
+    num: number | null,
+    date: string,
+    title: string,
+    parentDir: string,
+    extra?: { server?: string; channel?: string }
+  ): string {
     const numStr = num === null ? '' : num.toString().padStart(3, '0')
+    const server = extra?.server ? this.sanitizeDirName(extra.server) : ''
+    const channel = extra?.channel ? this.sanitizeDirName(extra.channel) : ''
 
-    let name = this.options.namingPattern
-      .replace(/\{num\}/g, numStr)
-      .replace(/\{date\}/g, date)
-      .replace(/\{title\}/g, title)
+    const tokens: Record<string, string> = {
+      '{num}': numStr,
+      '{date}': date,
+      '{title}': title,
+      '{server}': server,
+      '{channel}': channel
+    }
+    let name = this.options.namingPattern.replace(
+      /\{(num|date|title|server|channel)\}/g,
+      (match) => tokens[match] ?? match
+    )
 
     name = this.truncateName(name, this.options.maxFilenameLength)
 
@@ -147,6 +181,10 @@ export class FolderBuilder {
     const budget = MAX_FULL_PATH - parentDir.length - 1
     if (parentDir.length + 1 + name.length > MAX_FULL_PATH) {
       name = this.truncateName(name, Math.max(16, budget))
+    }
+
+    if (WINDOWS_RESERVED_RE.test(name)) {
+      name = this.truncateName(`_${name}`, this.options.maxFilenameLength)
     }
 
     if (!name) name = 'unnamed'

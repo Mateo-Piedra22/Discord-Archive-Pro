@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import {
   Archive,
+  BookOpen,
   Compass,
   DownloadCloud,
   FileSearch,
@@ -18,23 +19,33 @@ import {
   LayoutDashboard,
   MessageSquare,
   Moon,
+  Palette,
   Pause,
   Play,
   RefreshCw,
+  RotateCw,
   Search,
-  Settings2
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  Trash2
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useUiStore } from '../stores/uiStore'
 import type { Vista } from '../stores/uiStore'
 import { useBrowserStore } from '../stores/browserStore'
 import { useDownloadStore } from '../stores/downloadStore'
+import type { DownloadHistoryRecord } from '../../core/discord/types'
+import { showToast } from './Toast'
+
+type TemaApp = 'dark' | 'light' | 'sepia'
 
 /** Clave del tema compartida con el resto de la aplicación. */
 const TEMA_KEY = 'ui_theme'
 
 /** Orden fijo de los grupos en la lista. */
-const GRUPOS = ['Ir a', 'Servidores', 'Acciones'] as const
+const GRUPOS = ['Ir a', 'Archivo reciente', 'Servidores', 'Canales', 'Acciones'] as const
 
 interface Accion {
   id: string
@@ -53,12 +64,24 @@ function normalizar(texto: string): string {
   return texto.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 }
 
-/** Alterna el tema y lo deja guardado, igual que hace Ajustes. */
-function alternarTema(): void {
-  const actual = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
-  const siguiente = actual === 'dark' ? 'light' : 'dark'
-  document.documentElement.dataset.theme = siguiente
-  localStorage.setItem(TEMA_KEY, siguiente)
+function leerTemaActual(): TemaApp {
+  const valor = document.documentElement.dataset.theme || localStorage.getItem(TEMA_KEY)
+  return valor === 'light' || valor === 'sepia' ? valor : 'dark'
+}
+
+/** Aplica el tema indicado y notifica a la ventana para mantener sincronía. */
+function aplicarTema(next: TemaApp): void {
+  document.documentElement.dataset.theme = next
+  localStorage.setItem(TEMA_KEY, next)
+  window.dispatchEvent(new CustomEvent<TemaApp>('dap:theme', { detail: next }))
+}
+
+/** Rota entre los tres temas editoriales (oscuro → claro → sepia → oscuro). */
+function ciclarTema(): void {
+  const actual = leerTemaActual()
+  const siguiente: TemaApp =
+    actual === 'dark' ? 'light' : actual === 'light' ? 'sepia' : 'dark'
+  aplicarTema(siguiente)
 }
 
 export default function CommandPalette() {
@@ -69,7 +92,9 @@ export default function CommandPalette() {
   const setBusqueda = useUiStore((s) => s.setBusqueda)
 
   const guilds = useBrowserStore((s) => s.guilds)
+  const channels = useBrowserStore((s) => s.channels)
   const selectGuild = useBrowserStore((s) => s.selectGuild)
+  const selectChannel = useBrowserStore((s) => s.selectChannel)
   const fetchGuilds = useBrowserStore((s) => s.fetchGuilds)
 
   const pauseAll = useDownloadStore((s) => s.pauseAll)
@@ -79,6 +104,7 @@ export default function CommandPalette() {
 
   const [consulta, setConsulta] = useState('')
   const [activo, setActivo] = useState(0)
+  const [historialReciente, setHistorialReciente] = useState<DownloadHistoryRecord[]>([])
   const campoRef = useRef<HTMLInputElement>(null)
   const itemsRef = useRef<(HTMLButtonElement | null)[]>([])
 
@@ -137,8 +163,27 @@ export default function CommandPalette() {
       }
     ]
 
-    // Solo los primeros servidores: la lista se vuelve inmanejable después.
-    const servidores: Accion[] = guilds.slice(0, 8).map((guild) => ({
+    const rutasVistas = new Set<string>()
+    const archivosRecientes: Accion[] = []
+    for (const row of historialReciente) {
+      if (row.status !== 'done' || !row.download_path) continue
+      const claveRuta = row.download_path.replace(/\\/g, '/').toLowerCase()
+      if (rutasVistas.has(claveRuta)) continue
+      rutasVistas.add(claveRuta)
+      const rutaDestino = row.download_path
+      const nombreHilo = row.thread_name || row.thread_id
+      archivosRecientes.push({
+        id: `reciente-${row.id}`,
+        grupo: 'Archivo reciente',
+        etiqueta: row.guild_name ? `${nombreHilo} · ${row.guild_name}` : nombreHilo,
+        Icono: BookOpen,
+        ejecutar: () => {
+          useUiStore.getState().abrirArchivo(rutaDestino)
+        }
+      })
+    }
+
+    const servidores: Accion[] = guilds.map((guild) => ({
       id: `servidor-${guild.id}`,
       grupo: 'Servidores',
       etiqueta: guild.name,
@@ -151,6 +196,19 @@ export default function CommandPalette() {
         setVista('explorar')
       }
     }))
+
+    const canalesActivos: Accion[] = channels
+      .filter((ch) => ch.type !== 4)
+      .map((channel) => ({
+        id: `canal-${channel.id}`,
+        grupo: 'Canales',
+        etiqueta: `#${channel.name || channel.id}`,
+        Icono: Hash,
+        ejecutar: () => {
+          selectChannel(channel)
+          setVista('explorar')
+        }
+      }))
 
     const accionesSueltas: Accion[] = [
       {
@@ -211,35 +269,178 @@ export default function CommandPalette() {
       {
         id: 'accion-tema',
         grupo: 'Acciones',
-        etiqueta: 'Cambiar tema',
+        etiqueta: 'Cambiar tema (Oscuro / Claro / Sepia)',
+        Icono: Palette,
+        ejecutar: () => ciclarTema()
+      },
+      {
+        id: 'accion-tema-dark',
+        grupo: 'Acciones',
+        etiqueta: 'Tema: Tinta oscura',
         Icono: Moon,
-        ejecutar: () => alternarTema()
+        ejecutar: () => aplicarTema('dark')
+      },
+      {
+        id: 'accion-tema-light',
+        grupo: 'Acciones',
+        etiqueta: 'Tema: Papel claro',
+        Icono: Sun,
+        ejecutar: () => aplicarTema('light')
+      },
+      {
+        id: 'accion-tema-sepia',
+        grupo: 'Acciones',
+        etiqueta: 'Tema: Pergamino sepia',
+        Icono: BookOpen,
+        ejecutar: () => aplicarTema('sepia')
+      },
+      {
+        id: 'accion-optimizar-memoria',
+        grupo: 'Acciones',
+        etiqueta: 'Optimizar memoria y caché',
+        Icono: Sparkles,
+        ejecutar: () => {
+          void window.api.app
+            .optimizeMemory()
+            .then((res) => {
+              showToast(`Memoria optimizada (${res.cachesCleared} entradas liberadas)`, 'success')
+            })
+            .catch((error) => {
+              showToast(
+                error instanceof Error ? error.message : 'No se pudo optimizar la memoria',
+                'error'
+              )
+            })
+        }
+      },
+      {
+        id: 'accion-verificar-integridad',
+        grupo: 'Acciones',
+        etiqueta: 'Verificar integridad de caché y BD',
+        Icono: ShieldCheck,
+        ejecutar: () => {
+          void window.api.cache
+            .verifyIntegrity()
+            .then((res) => {
+              const detalleInvalidados =
+                res.invalidatedFiles > 0 ? ` (${res.invalidatedFiles} invalidados)` : ''
+              if (res.integrityOk) {
+                showToast(
+                  `Integridad OK · ${res.checkedFiles} archivos verificados${detalleInvalidados}, ${res.orphanPosts} huérfanos reparados`,
+                  'success'
+                )
+              } else {
+                showToast(
+                  `Alerta de integridad en la BD · ${res.checkedFiles} archivos verificados${detalleInvalidados}, ${res.orphanPosts} huérfanos reparados`,
+                  'warning'
+                )
+              }
+            })
+            .catch((error) => {
+              showToast(
+                error instanceof Error
+                  ? error.message
+                  : 'No se pudo verificar la integridad de caché y BD',
+                'error'
+              )
+            })
+        }
+      },
+      {
+        id: 'accion-reintentar-fallidas',
+        grupo: 'Acciones',
+        etiqueta: 'Reintentar descargas fallidas',
+        Icono: RotateCw,
+        ejecutar: () => {
+          void useDownloadStore
+            .getState()
+            .retryAllFailed()
+            .then((count) => {
+              if (count > 0) {
+                showToast(
+                  `Reintentando ${count} ${count === 1 ? 'descarga fallida' : 'descargas fallidas'}`,
+                  'success'
+                )
+              } else {
+                showToast('No hay descargas fallidas para reintentar', 'info')
+              }
+            })
+            .catch((error) => {
+              showToast(
+                error instanceof Error
+                  ? error.message
+                  : 'No se pudieron reintentar las descargas fallidas',
+                'error'
+              )
+            })
+        }
+      },
+      {
+        id: 'accion-limpiar-completadas',
+        grupo: 'Acciones',
+        etiqueta: 'Limpiar descargas completadas',
+        Icono: Trash2,
+        ejecutar: () => {
+          useDownloadStore.getState().clearCompleted()
+          showToast('Descargas completadas limpiadas de la cola', 'success')
+        }
       }
     ]
 
-    return [...vistas, ...servidores, ...accionesSueltas]
-  }, [guilds, selectGuild, fetchGuilds, pickDirectory, openOutputFolder, pauseAll, resumeAll, setAtajos, setBusqueda, setVista])
+    return [...vistas, ...archivosRecientes, ...servidores, ...canalesActivos, ...accionesSueltas]
+  }, [
+    historialReciente,
+    guilds,
+    channels,
+    selectGuild,
+    selectChannel,
+    fetchGuilds,
+    pickDirectory,
+    openOutputFolder,
+    pauseAll,
+    resumeAll,
+    setAtajos,
+    setBusqueda,
+    setVista
+  ])
 
-  // Filtro tolerante a acentos; los grupos vacíos desaparecen.
+  // Filtro tolerante a acentos; sin búsqueda acota listas largas a 8 elementos.
   const grupos = useMemo(() => {
     const busqueda = normalizar(consulta.trim())
     const visibles = busqueda
       ? acciones.filter((accion) => normalizar(accion.etiqueta).includes(busqueda))
       : acciones
-    return GRUPOS.map((nombre) => ({
-      nombre,
-      acciones: visibles.filter((accion) => accion.grupo === nombre)
-    })).filter((grupo) => grupo.acciones.length > 0)
+    return GRUPOS.map((nombre) => {
+      const lista = visibles.filter((accion) => accion.grupo === nombre)
+      const acotada =
+        !busqueda && (nombre === 'Servidores' || nombre === 'Canales' || nombre === 'Archivo reciente')
+          ? lista.slice(0, 8)
+          : lista
+      return { nombre, acciones: acotada }
+    }).filter((grupo) => grupo.acciones.length > 0)
   }, [acciones, consulta])
 
   const plano = useMemo(() => grupos.flatMap((grupo) => grupo.acciones), [grupos])
 
-  // Al abrir se limpia la búsqueda y se enfoca el campo.
+  // Al abrir se limpia la búsqueda, se enfoca el campo y se carga el historial reciente.
   useEffect(() => {
     if (!paletaAbierta) return
     setConsulta('')
     setActivo(0)
     campoRef.current?.focus()
+
+    let vigente = true
+    window.api.download
+      .getHistory(15, 0)
+      .then((filas) => {
+        if (vigente) setHistorialReciente(filas ?? [])
+      })
+      .catch(() => {
+        if (vigente) setHistorialReciente([])
+      })
+    return () => {
+      vigente = false
+    }
   }, [paletaAbierta])
 
   // La selección nunca queda fuera de la lista filtrada.
@@ -274,6 +475,14 @@ export default function CommandPalette() {
     } else if (evento.key === 'ArrowUp') {
       evento.preventDefault()
       mover(-1)
+    } else if (evento.key === 'Home') {
+      if (plano.length === 0) return
+      evento.preventDefault()
+      setActivo(0)
+    } else if (evento.key === 'End') {
+      if (plano.length === 0) return
+      evento.preventDefault()
+      setActivo(plano.length - 1)
     } else if (evento.key === 'Enter') {
       evento.preventDefault()
       ejecutarAccion(plano[activo])

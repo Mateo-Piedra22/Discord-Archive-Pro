@@ -17,12 +17,24 @@ import type {
 } from '../discord/types'
 
 let db: Database.Database | null = null
+let currentDbPath: string | null = null
+
+function getFileSizeSafe(filePath: string | null): number {
+  if (!filePath) return 0
+  try {
+    return fs.statSync(filePath).size
+  } catch {
+    return 0
+  }
+}
 
 function applyPragmas(database: Database.Database): void {
   database.pragma('journal_mode = WAL')
   database.pragma('synchronous = NORMAL')
   database.pragma('foreign_keys = ON')
-  database.pragma('cache_size = -64000') // 64 MB
+  database.pragma('cache_size = -32000') // 32 MB (equilibrio RAM/rendimiento)
+  database.pragma('temp_store = MEMORY')
+  database.pragma('journal_size_limit = 67108864') // tope WAL 64 MB
   database.pragma('busy_timeout = 10000')
 }
 
@@ -33,6 +45,7 @@ export function initDatabase(): Database.Database {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
 
   const dbPath = path.join(dataDir, 'estrato.db')
+  currentDbPath = dbPath
 
   // Migración de marca: la versión anterior guardaba `foro-downloader.db`.
   // Se renombra una sola vez para no perder la caché existente.
@@ -125,6 +138,25 @@ export function closeDatabase(): void {
     try { db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* ignorar */ }
     db.close()
     db = null
+    currentDbPath = null
+  }
+}
+
+export function optimizeMemory(): { walSizeBytes: number; dbSizeBytes: number } {
+  const d = getDatabase()
+  try {
+    d.pragma('wal_checkpoint(PASSIVE)')
+  } catch {
+    /* ignorar */
+  }
+  try {
+    d.pragma('shrink_memory')
+  } catch {
+    /* ignorar */
+  }
+  return {
+    walSizeBytes: getFileSizeSafe(currentDbPath ? `${currentDbPath}-wal` : null),
+    dbSizeBytes: getFileSizeSafe(currentDbPath)
   }
 }
 
@@ -367,6 +399,8 @@ export function getDbStats(): {
   totalFiles: number
   totalSize: number
   queuePending: number
+  walSizeBytes: number
+  dbSizeBytes: number
 } {
   const d = getDatabase()
   const posts = (d.prepare('SELECT COUNT(*) AS c FROM cached_posts').get() as { c: number }).c
@@ -379,7 +413,15 @@ export function getDbStats(): {
       .get() as { c: number }
   ).c
 
-  return { totalPosts: posts, totalMessages: messages, totalFiles: files, totalSize: size, queuePending: pending }
+  return {
+    totalPosts: posts,
+    totalMessages: messages,
+    totalFiles: files,
+    totalSize: size,
+    queuePending: pending,
+    walSizeBytes: getFileSizeSafe(currentDbPath ? `${currentDbPath}-wal` : null),
+    dbSizeBytes: getFileSizeSafe(currentDbPath)
+  }
 }
 
 // ==================== Historial ====================
@@ -459,7 +501,13 @@ export function getArchiveStats(outputDir: string): {
   files: number
   bytes: number
   servers: { name: string; posts: number; bytes: number }[]
-  recent: { threadName: string; status: string; completedAt: string | null; bytes: number }[]
+  recent: {
+    threadName: string
+    status: string
+    completedAt: string | null
+    bytes: number
+    downloadPath: string | null
+  }[]
 } {
   const d = getDatabase()
 
@@ -487,12 +535,18 @@ export function getArchiveStats(outputDir: string): {
 
   const recent = d
     .prepare(`
-      SELECT thread_name, status, completed_at, total_bytes
+      SELECT thread_name, status, completed_at, total_bytes, download_path
       FROM download_history
       ORDER BY id DESC
       LIMIT 12
     `)
-    .all() as { thread_name: string | null; status: string; completed_at: string | null; total_bytes: number }[]
+    .all() as {
+      thread_name: string | null
+      status: string
+      completed_at: string | null
+      total_bytes: number
+      download_path: string | null
+    }[]
 
   return {
     posts,
@@ -507,12 +561,14 @@ export function getArchiveStats(outputDir: string): {
       threadName: fila.thread_name || 'Sin título',
       status: fila.status,
       completedAt: fila.completed_at,
-      bytes: fila.total_bytes || 0
+      bytes: fila.total_bytes || 0,
+      downloadPath: fila.download_path || null
     }))
   }
 }
 
-export function clearAllCache(): void {  const d = getDatabase()
+export function clearAllCache(): void {
+  const d = getDatabase()
   const purge = d.transaction(() => {
     d.exec(`
       DELETE FROM cached_messages;
@@ -525,4 +581,71 @@ export function clearAllCache(): void {  const d = getDatabase()
   purge()
   d.pragma('wal_checkpoint(TRUNCATE)')
   d.exec('VACUUM')
+}
+
+/**
+ * Comprueba la integridad de SQLite (`quick_check`) y concilia los registros
+ * en caché contra el sistema de archivos dentro de una transacción.
+ */
+export function verifyAndRepairCache(): {
+  checkedFiles: number
+  invalidatedFiles: number
+  orphanPosts: number
+  integrityOk: boolean
+} {
+  const d = getDatabase()
+  let integrityOk = false
+  try {
+    const quick = d.pragma('quick_check') as { quick_check: string }[]
+    integrityOk = quick[0]?.quick_check === 'ok'
+  } catch {
+    integrityOk = false
+  }
+
+  const files = d
+    .prepare('SELECT file_id, local_path FROM cached_files WHERE still_valid = 1')
+    .all() as { file_id: string; local_path: string }[]
+
+  const missingFiles: string[] = []
+  for (const fila of files) {
+    if (!fila.local_path || !fs.existsSync(fila.local_path)) {
+      missingFiles.push(fila.file_id)
+    }
+  }
+
+  const posts = d
+    .prepare(
+      "SELECT thread_id, download_path FROM cached_posts WHERE download_path IS NOT NULL AND (sync_status IS NULL OR sync_status != 'missing')"
+    )
+    .all() as { thread_id: string; download_path: string }[]
+
+  const missingPosts: string[] = []
+  for (const fila of posts) {
+    if (!fs.existsSync(fila.download_path)) {
+      missingPosts.push(fila.thread_id)
+    }
+  }
+
+  if (missingFiles.length > 0 || missingPosts.length > 0) {
+    const invalidateFile = d.prepare('UPDATE cached_files SET still_valid = 0 WHERE file_id = ?')
+    const markPostMissing = d.prepare(
+      "UPDATE cached_posts SET sync_status = 'missing' WHERE thread_id = ?"
+    )
+    const repair = d.transaction(() => {
+      for (const fileId of missingFiles) {
+        invalidateFile.run(fileId)
+      }
+      for (const threadId of missingPosts) {
+        markPostMissing.run(threadId)
+      }
+    })
+    repair()
+  }
+
+  return {
+    checkedFiles: files.length,
+    invalidatedFiles: missingFiles.length,
+    orphanPosts: missingPosts.length,
+    integrityOk
+  }
 }

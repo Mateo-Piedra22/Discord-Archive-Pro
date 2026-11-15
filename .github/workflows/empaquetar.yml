@@ -1,16 +1,26 @@
-# Empaquetado del .exe de Windows.
-# Se lanza a mano desde Actions o al publicar una etiqueta `v*`.
-# El artefacto queda descargable desde la ejecución del workflow.
+# Empaquetado de instaladores y ejecutables de Estrato para Windows.
+# Se lanza manualmente desde Actions (portable, nsis o ambos) o automáticamente
+# al publicar una etiqueta `v*` (genera ambos objetivos y publica la Release).
 name: Empaquetar Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      objetivo:
+        description: 'Objetivo de empaquetado para Windows'
+        required: false
+        type: choice
+        default: 'portable'
+        options:
+          - portable
+          - nsis
+          - ambos
   push:
     tags:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: empaquetar-${{ github.ref }}
@@ -18,7 +28,7 @@ concurrency:
 
 jobs:
   empaquetar:
-    name: Estrato.exe
+    name: Empaquetado Windows
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -35,22 +45,132 @@ jobs:
       - name: Dependencias
         run: npm ci
 
-      - name: Tipos y tests
-        run: |
-          npm run typecheck
-          npm test
+      - name: Tipos
+        id: typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        id: test
+        run: npm test -- --run
 
       # electron-builder empaqueta `out/`, así que primero hay que compilar.
       - name: Compilar
+        id: build
         run: npm run build
 
-      - name: Empaquetar
-        run: npx electron-builder --win portable --publish never
+      - name: Empaquetar para Windows
+        id: package
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_OBJETIVO: ${{ inputs.objetivo }}
+        run: |
+          $objetivo = if ($env:EVENT_NAME -eq 'push') { 'ambos' } elseif ($env:INPUT_OBJETIVO) { $env:INPUT_OBJETIVO } else { 'portable' }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "objetivo=$objetivo"
+          switch ($objetivo) {
+            'portable' { npx electron-builder --win portable --publish never }
+            'nsis'     { npx electron-builder --win nsis --publish never }
+            'ambos'    { npx electron-builder --win portable nsis --publish never }
+            default    { throw "Objetivo de empaquetado no reconocido: $objetivo" }
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Subir el ejecutable
+      - name: Verificar lanzamiento y generar SHA256SUMS
+        id: verify
+        run: npm run verify:release -- --dist
+
+      - name: Subir artefactos
+        id: upload
         uses: actions/upload-artifact@v5
         with:
           name: Estrato-windows
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publicar Release en GitHub
+        id: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $archivos = @(Get-ChildItem -Path dist -Filter *.exe | ForEach-Object { $_.FullName })
+          $archivos += (Resolve-Path dist/SHA256SUMS.txt).Path
+          gh release view $env:TAG_NAME *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG_NAME @archivos --clobber
+          } else {
+            gh release create $env:TAG_NAME @archivos --title "Estrato $env:TAG_NAME" --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Resumen del empaquetado
+        if: always()
+        env:
+          OBJETIVO: ${{ steps.package.outputs.objetivo }}
+          OUTCOME_TYPECHECK: ${{ steps.typecheck.outcome }}
+          OUTCOME_TEST: ${{ steps.test.outcome }}
+          OUTCOME_BUILD: ${{ steps.build.outcome }}
+          OUTCOME_PACKAGE: ${{ steps.package.outcome }}
+          OUTCOME_VERIFY: ${{ steps.verify.outcome }}
+          OUTCOME_RELEASE: ${{ steps.release.outcome }}
+        run: |
+          @'
+          import fs from 'node:fs'
+          import path from 'node:path'
+          import { validateElectronSecurityConfig } from './scripts/verify-release.mjs'
+
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY
+          if (!summaryPath) process.exit(0)
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          const mainFile = 'src/main/index.ts'
+          const secResult = fs.existsSync(mainFile)
+            ? validateElectronSecurityConfig(fs.readFileSync(mainFile, 'utf8'))
+            : { ok: false, errors: ['ausente'] }
+          const secSummary = secResult.ok
+            ? 'nodeIntegration: false · contextIsolation: true · sandbox: true · webSecurity: true'
+            : `error (${secResult.errors.join('; ')})`
+
+          const exeLines = []
+          if (fs.existsSync('dist')) {
+            for (const entry of fs.readdirSync('dist', { withFileTypes: true })) {
+              if (entry.isFile() && entry.name.toLowerCase().endsWith('.exe')) {
+                const sizeMb = (fs.statSync(path.join('dist', entry.name)).size / (1024 * 1024)).toFixed(2)
+                exeLines.push(`- \`${entry.name}\` (${sizeMb} MiB)`)
+              }
+            }
+          }
+
+          const sumsText = fs.existsSync('dist/SHA256SUMS.txt')
+            ? fs.readFileSync('dist/SHA256SUMS.txt', 'utf8').trim()
+            : ''
+
+          const lines = [
+            `## Empaquetado Windows — ${pkg.build?.productName || pkg.name} v${pkg.version}`,
+            '',
+            `- Objetivo seleccionado: \`${process.env.OBJETIVO || 'desconocido'}\``,
+            `- Invariantes de seguridad Electron (\`src/main/index.ts\`): ${secSummary}`,
+            '',
+            '| Paso | Resultado |',
+            '|---|---|',
+            `| Tipos | \`${process.env.OUTCOME_TYPECHECK}\` |`,
+            `| Tests | \`${process.env.OUTCOME_TEST}\` |`,
+            `| Compilación | \`${process.env.OUTCOME_BUILD}\` |`,
+            `| Empaquetado | \`${process.env.OUTCOME_PACKAGE}\` |`,
+            `| Verificación y checksums | \`${process.env.OUTCOME_VERIFY}\` |`,
+            `| Release en GitHub | \`${process.env.OUTCOME_RELEASE || 'skipped'}\` |`,
+            '',
+            '### Artefactos generados',
+            ...(exeLines.length > 0 ? exeLines : ['- No se generaron ejecutables .exe.']),
+            ''
+          ]
+
+          if (sumsText) {
+            lines.push('### Checksums (`dist/SHA256SUMS.txt`)', '', '```text', sumsText, '```', '')
+          }
+
+          fs.appendFileSync(summaryPath, lines.join('\n'), 'utf8')
+          '@ | node --input-type=module -

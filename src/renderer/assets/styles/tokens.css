@@ -5,6 +5,8 @@
    ============================================================ */
 
 :root {
+  color-scheme: dark;
+
   /* ---- Superficies (tinta cálida, no azul marino) ---- */
   --ink-950: #0b0d10;
   --ink-900: #0e1116;
@@ -38,6 +40,7 @@
   --accent-soft: rgba(201, 135, 63, 0.12);
   --accent-line: rgba(201, 135, 63, 0.32);
   --accent-fg: #f0c48a;
+  --accent-contrast: #1a1206;
 
   /* ---- Semánticos ---- */
   --ok: #56a377;
@@ -49,14 +52,17 @@
   --info: #5f8cba;
   --info-soft: rgba(95, 140, 186, 0.13);
 
-  /* ---- Tipografía ---- */
+  /* ---- Tipografía (100% offline: Windows, macOS y Linux) ---- */
   /* Los nombres de canal de Discord llevan emoji: sin una fuente de emoji en la
      pila, Windows los dibuja como cajas y el nombre se vuelve ilegible. */
-  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Inter',
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont,
+    'SF Pro Text', 'Ubuntu', 'Cantarell', 'Noto Sans', system-ui, 'Inter',
     'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
-  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, ui-serif, serif;
-  --font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, ui-monospace, 'Segoe UI Emoji',
-    monospace;
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino,
+    'Sitka Heading', Georgia, 'Noto Serif', 'Liberation Serif', ui-serif, serif;
+  --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', Consolas,
+    'Liberation Mono', 'DejaVu Sans Mono', ui-monospace, 'Segoe UI Emoji',
+    'Apple Color Emoji', 'Noto Color Emoji', monospace;
 
   --text-2xs: 10px;
   --text-xs: 11px;
@@ -86,6 +92,7 @@
   --r-full: 999px;
 
   /* ---- Elevación ---- */
+  --scrim-bg: rgba(6, 7, 9, 0.78);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
   --ring: 0 0 0 2px var(--ink-900), 0 0 0 3px var(--accent-line);
@@ -106,6 +113,7 @@
   --bg-1: var(--surface-1);
   --bg-2: var(--surface-2);
   --bg-3: var(--surface-3);
+  --bg-4: var(--surface-hover);
   --bg-hover: var(--surface-hover);
   --text-0: var(--fg);
   --text-1: var(--fg);
@@ -131,8 +139,6 @@
   --font-base: var(--text-md);
   --font-md: var(--text-lg);
   --font-lg: var(--text-xl);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
 
   /* ---- Estados de descarga ---- */
   --status-queued: var(--fg-3);
@@ -145,6 +151,8 @@
 
 /* Tema claro: mismo sistema, papel cálido. */
 :root[data-theme='light'] {
+  color-scheme: light;
+
   --ink-950: #f6f4ef;
   --ink-900: #f1eee7;
   --ink-850: #eae6dd;
@@ -174,12 +182,63 @@
   --accent-soft: rgba(168, 102, 31, 0.1);
   --accent-line: rgba(168, 102, 31, 0.35);
   --accent-fg: #7a4812;
+  --accent-contrast: #fdfaf5;
 
   --ok: #3f7d58;
   --warn: #96751a;
   --err: #a13f3b;
   --info: #3f6d97;
 
+  --scrim-bg: rgba(28, 24, 18, 0.44);
   --shadow-sm: 0 1px 2px rgba(60, 50, 35, 0.12);
   --shadow-md: 0 8px 24px rgba(60, 50, 35, 0.16);
+}
+
+/* Tema sepia: pergamino cálido para lectura prolongada de hilos y documentos. */
+:root[data-theme='sepia'] {
+  color-scheme: light;
+
+  --ink-950: #f6f1e4;
+  --ink-900: #efe8d8;
+  --ink-850: #e6decb;
+  --ink-800: #ded4be;
+  --ink-750: #d3c6ab;
+  --ink-700: #cabba0;
+  --ink-650: #bcae92;
+
+  --surface-0: #efe8d8;
+  --surface-1: #e6decb;
+  --surface-2: #ded4be;
+  --surface-3: #d3c6ab;
+  --surface-hover: #cabba0;
+
+  --line-soft: rgba(54, 40, 20, 0.09);
+  --line: rgba(54, 40, 20, 0.16);
+  --line-strong: rgba(54, 40, 20, 0.28);
+
+  --fg: #2b2318;
+  --fg-2: #4a3d2d;
+  --fg-3: #6e5e4a;
+  --fg-4: #93826b;
+
+  --accent: #9c5a1a;
+  --accent-hover: #834912;
+  --accent-press: #6e3c0d;
+  --accent-soft: rgba(156, 90, 26, 0.12);
+  --accent-line: rgba(156, 90, 26, 0.36);
+  --accent-fg: #753f0c;
+  --accent-contrast: #fbf6ec;
+
+  --ok: #2f6b47;
+  --ok-soft: rgba(47, 107, 71, 0.13);
+  --warn: #8a6412;
+  --warn-soft: rgba(138, 100, 18, 0.13);
+  --err: #963834;
+  --err-soft: rgba(150, 56, 52, 0.13);
+  --info: #2f5c85;
+  --info-soft: rgba(47, 92, 133, 0.13);
+
+  --scrim-bg: rgba(43, 35, 24, 0.48);
+  --shadow-sm: 0 1px 2px rgba(54, 40, 20, 0.12);
+  --shadow-md: 0 8px 24px rgba(54, 40, 20, 0.18);
 }

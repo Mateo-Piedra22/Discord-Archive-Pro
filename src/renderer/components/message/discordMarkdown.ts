@@ -30,6 +30,7 @@ const PATRON_ENLINEA = [
   '(~~[\\s\\S]+?~~)',
   '(\\[[^\\]\\n]*\\]\\([^)\\s]+\\))',
   '(<a?:[A-Za-z0-9_~]+:\\d+>)',
+  '(<t:\\d+(?::[tTdDfFR])?>)',
   '(<@!?\\d+>)',
   '(<@&\\d+>)',
   '(<#\\d+>)',
@@ -46,6 +47,7 @@ type TipoToken =
   | 'tachado'
   | 'enlace'
   | 'emoji'
+  | 'timestamp'
   | 'usuario'
   | 'rol'
   | 'canal'
@@ -74,10 +76,63 @@ function tipoDeToken(token: string): TipoToken {
   if (token.startsWith('_') || token.startsWith('*')) return 'cursiva'
   if (token.startsWith('[')) return 'enlace'
   if (token.startsWith('<a:') || token.startsWith('<:')) return 'emoji'
+  if (token.startsWith('<t:')) return 'timestamp'
   if (token.startsWith('<@&')) return 'rol'
   if (token.startsWith('<@')) return 'usuario'
   if (token.startsWith('<#')) return 'canal'
   return 'url'
+}
+
+/** Formatea una marca `<t:unix(:estilo)?>` de Discord en español legible. */
+function formatearTimestamp(token: string): { texto: string; titulo: string } {
+  const m = /^<t:(\d+)(?::([tTdDfFR]))?>$/.exec(token)
+  if (!m) return { texto: token, titulo: token }
+  const fecha = new Date(Number(m[1]) * 1000)
+  if (Number.isNaN(fecha.getTime())) return { texto: token, titulo: token }
+
+  const estilo = m[2] || 'f'
+  const titulo = fecha.toLocaleString('es')
+
+  if (estilo === 'R') {
+    const diffMs = fecha.getTime() - Date.now()
+    const absSeg = Math.round(Math.abs(diffMs) / 1000)
+    const futuro = diffMs > 0
+    const envolver = (n: number, u: string) => (futuro ? `en ${n} ${u}` : `hace ${n} ${u}`)
+    if (absSeg < 60) return { texto: futuro ? 'en unos segundos' : 'hace unos segundos', titulo }
+    const mins = Math.round(absSeg / 60)
+    if (mins < 60) return { texto: envolver(mins, mins === 1 ? 'minuto' : 'minutos'), titulo }
+    const horas = Math.round(mins / 60)
+    if (horas < 24) return { texto: envolver(horas, horas === 1 ? 'hora' : 'horas'), titulo }
+    const dias = Math.round(horas / 24)
+    return { texto: envolver(dias, dias === 1 ? 'día' : 'días'), titulo }
+  }
+
+  const opciones: Intl.DateTimeFormatOptions =
+    estilo === 't'
+      ? { hour: '2-digit', minute: '2-digit' }
+      : estilo === 'T'
+        ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+        : estilo === 'd'
+          ? { day: '2-digit', month: '2-digit', year: 'numeric' }
+          : estilo === 'D'
+            ? { day: 'numeric', month: 'long', year: 'numeric' }
+            : estilo === 'F'
+              ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+              : { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+
+  return { texto: fecha.toLocaleString('es', opciones), titulo }
+}
+
+/** Construye un nodo `<pre className="codigo">` conservando el lenguaje si existe. */
+function renderizarBloqueCodigo(clave: string, lenguaje: string, codigo: string): ReactNode {
+  const limpio = codigo.replace(/^\n+|\n+$/g, '')
+  const lang = lenguaje.trim()
+  return h(
+    'pre',
+    { key: clave, className: 'codigo', 'data-lang': lang || undefined },
+    lang ? h('span', { className: 'msg__codelang' }, lang) : null,
+    h('code', null, limpio)
+  )
 }
 
 /** Solo los dígitos de una mención: `<@!123>` → `123`. */
@@ -133,13 +188,11 @@ function analizar(linea: string, clave: string, menciones?: Map<string, string>)
 
     switch (tipo) {
       case 'bloque': {
-        // ```lenguaje\ncódigo``` → el lenguaje se descarta.
         const interior = token.slice(3, -3)
         const salto = interior.indexOf('\n')
+        const lenguaje = salto >= 0 ? interior.slice(0, salto).trim() : ''
         const codigo = salto >= 0 ? interior.slice(salto + 1) : interior
-        nodos.push(
-          h('pre', { key: claveToken, className: 'codigo' }, h('code', null, codigo.replace(/\n$/, '')))
-        )
+        nodos.push(renderizarBloqueCodigo(claveToken, lenguaje, codigo))
         break
       }
       case 'codigo':
@@ -185,6 +238,11 @@ function analizar(linea: string, clave: string, menciones?: Map<string, string>)
       case 'emoji':
         nodos.push(renderizarEmoji(token, claveToken))
         break
+      case 'timestamp': {
+        const { texto, titulo } = formatearTimestamp(token)
+        nodos.push(h('span', { key: claveToken, className: 'msg__ts', title: titulo }, texto))
+        break
+      }
       case 'usuario':
       case 'rol':
       case 'canal':
@@ -216,19 +274,103 @@ function analizar(linea: string, clave: string, menciones?: Map<string, string>)
 }
 
 /**
- * Renderiza el markdown de un mensaje. Los saltos de línea se convierten en
- * `<br>` para que el resultado se vea igual con o sin `white-space: pre-wrap`.
+ * Renderiza el markdown de un mensaje soportando bloques multilínea, encabezados,
+ * subtexto (`-#`), citas (`>` / `>>>`), timestamps `<t:...>` y enlaces seguros.
  */
 export function renderizarMarkdown(texto: string, opciones: OpcionesMarkdown = {}): ReactNode {
   if (!texto) return null
 
-  const lineas = texto.split('\n')
+  const lineas = texto.replace(/\r\n/g, '\n').split('\n')
   const nodos: ReactNode[] = []
+  let previoFueBloque = true
 
-  lineas.forEach((linea, i) => {
-    if (i > 0) nodos.push(h('br', { key: `salto-${i}` }))
+  for (let i = 0; i < lineas.length; i++) {
+    const linea = lineas[i]
+    const recorte = linea.trimStart()
+
+    // Bloque de código multilínea ```lang\n...\n```
+    if (recorte.startsWith('```') && recorte.indexOf('```', 3) === -1) {
+      const lang = recorte.slice(3).trim()
+      let cierre = -1
+      for (let j = i + 1; j < lineas.length; j++) {
+        if (lineas[j].trim().startsWith('```')) {
+          cierre = j
+          break
+        }
+      }
+      if (cierre !== -1) {
+        nodos.push(renderizarBloqueCodigo(`fenced-${i}`, lang, lineas.slice(i + 1, cierre).join('\n')))
+        i = cierre
+        previoFueBloque = true
+        continue
+      }
+    }
+
+    // Cita multilínea con >>> hasta el final del mensaje
+    if (recorte.startsWith('>>>')) {
+      const primera = recorte.replace(/^>>>\s?/, '')
+      const resto = [primera, ...lineas.slice(i + 1)]
+      const contenidoCita: ReactNode[] = []
+      resto.forEach((ln, idx) => {
+        if (idx > 0) contenidoCita.push(h('br', { key: `qb-${i}-${idx}` }))
+        contenidoCita.push(...analizar(ln, `ql${i}-${idx}`, opciones.menciones))
+      })
+      nodos.push(h('blockquote', { key: `quote-all-${i}`, className: 'msg__quote' }, ...contenidoCita))
+      previoFueBloque = true
+      break
+    }
+
+    // Líneas consecutivas con >
+    if (/^>(?:\s|$)/.test(recorte)) {
+      const citaLineas: string[] = []
+      let j = i
+      while (j < lineas.length && /^>(?:\s|$)/.test(lineas[j].trimStart())) {
+        citaLineas.push(lineas[j].trimStart().replace(/^>\s?/, ''))
+        j++
+      }
+      const contenidoCita: ReactNode[] = []
+      citaLineas.forEach((ln, idx) => {
+        if (idx > 0) contenidoCita.push(h('br', { key: `qbr-${i}-${idx}` }))
+        contenidoCita.push(...analizar(ln, `q${i}-${idx}`, opciones.menciones))
+      })
+      nodos.push(h('blockquote', { key: `quote-${i}`, className: 'msg__quote' }, ...contenidoCita))
+      i = j - 1
+      previoFueBloque = true
+      continue
+    }
+
+    // Encabezados (#, ##, ###) y subtexto (-#) propios de Discord
+    const matchEncabezado = /^(#{1,3})\s+(.+)$/.exec(linea)
+    if (matchEncabezado) {
+      const nivel = matchEncabezado[1].length
+      nodos.push(
+        h(
+          'span',
+          { key: `h-${i}`, className: `msg__h${nivel}` },
+          ...analizar(matchEncabezado[2], `hl${i}`, opciones.menciones)
+        )
+      )
+      previoFueBloque = true
+      continue
+    }
+
+    const matchSubtexto = /^-#\s+(.+)$/.exec(linea)
+    if (matchSubtexto) {
+      nodos.push(
+        h(
+          'span',
+          { key: `sub-${i}`, className: 'msg__subtexto' },
+          ...analizar(matchSubtexto[1], `sl${i}`, opciones.menciones)
+        )
+      )
+      previoFueBloque = true
+      continue
+    }
+
+    if (!previoFueBloque) nodos.push(h('br', { key: `salto-${i}` }))
     nodos.push(...analizar(linea, `l${i}`, opciones.menciones))
-  })
+    previoFueBloque = false
+  }
 
   return nodos
 }

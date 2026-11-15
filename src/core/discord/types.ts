@@ -290,6 +290,7 @@ export interface DownloadTask {
   priority: number
   status: DownloadStatus
   progress: DownloadProgress
+  downloadPath?: string
   errorMessage?: string
   createdAt: string
   startedAt?: string
@@ -338,7 +339,7 @@ export interface ExportOptions {
   syncMode: 'quick' | 'force'
 }
 
-export type ExportFormat = 'markdown' | 'html' | 'json' | 'pdf' | 'epub'
+export type ExportFormat = 'markdown' | 'html' | 'json' | 'csv' | 'pdf' | 'epub'
 
 export interface ContentSelection {
   text: boolean

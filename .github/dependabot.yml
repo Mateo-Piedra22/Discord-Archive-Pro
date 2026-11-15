@@ -1,0 +1,37 @@
+# Configuración semanal de Dependabot para mantener dependencias npm y acciones de GitHub al día
+# agrupando actualizaciones menores y parches para reducir el ruido de PRs.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "npm"
+    groups:
+      dependencias-menores-y-parches:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      acciones-menores-y-parches:
+        update-types:
+          - "minor"
+          - "patch"

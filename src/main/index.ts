@@ -7,8 +7,10 @@ import {
   app, BrowserWindow, ipcMain, dialog, globalShortcut, Tray, Menu,
   nativeImage, shell, protocol, net, screen, session, Notification
 } from 'electron'
+import os from 'os'
 import path from 'path'
 import fs from 'fs'
+import { performance } from 'perf_hooks'
 import { pathToFileURL } from 'url'
 import { initDatabase, closeDatabase, resetStuckDownloads } from '../core/storage/database'
 import {
@@ -22,7 +24,7 @@ import { DownloadManager } from '../core/download/download-manager'
 import { CacheManager } from '../core/storage/cache-manager'
 import { TokenDetector } from '../core/discord/token-detector'
 import * as db from '../core/storage/database'
-import { isInside, isInsideReal } from './path-guard'
+import { isInside, isInsideReal, isInsideRealAsync } from './path-guard'
 import type {
   ExportOptions, ContentSelection, PersistedQueueItem
 } from '../core/discord/types'
@@ -106,10 +108,11 @@ function registerArchiveProtocol(): void {
       const filePath = decodeURIComponent(encoded)
       const root = outputDir()
 
-      if (!isInsideReal(root, filePath)) {
+      if (!(await isInsideRealAsync(root, filePath))) {
         return new Response('Forbidden', { status: 403 })
       }
-      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      const stat = await fs.promises.stat(filePath).catch(() => null)
+      if (!stat || !stat.isFile()) {
         return new Response('Not found', { status: 404 })
       }
 
@@ -504,10 +507,6 @@ function wireManagerEvents(manager: DownloadManager): void {
   manager.on('queue-updated', (queue) => send('download:queue-updated', queue))
   manager.on('all-completed', () => {
     send('download:all-completed')
-    if (getAllPreferences().autoOpenFolder) {
-      const dir = outputDir()
-      if (dir && fs.existsSync(dir)) void shell.openPath(dir)
-    }
     if (Notification.isSupported()) {
       new Notification({
         title: 'Archivado completado',
@@ -651,6 +650,10 @@ function setupIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('cache:verify-integrity', () => {
+    return db.verifyAndRepairCache()
+  })
+
   // --- Descargas ---
   ipcMain.handle('download:start', async (
     _event,
@@ -693,6 +696,14 @@ function setupIpcHandlers(): void {
   ipcMain.handle('download:retry', async (_event, taskId: string) => {
     await ensureManager()?.retryTask(taskId)
     return { success: true }
+  })
+  ipcMain.handle('download:retry-all-failed', async () => {
+    const count = (await ensureManager()?.retryAllFailed()) ?? 0
+    return { count }
+  })
+  ipcMain.handle('download:remove-task', async (_event, taskId: string) => {
+    const success = ensureManager()?.removeTask(taskId) ?? false
+    return { success }
   })
   ipcMain.handle('download:set-concurrency', async (_event, concurrency: number) => {
     ensureManager()?.setConcurrency(concurrency)
@@ -792,24 +803,24 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle('archive:read-file', async (_event, filePath: string) => {
     const root = outputDir()
-    if (!isInsideReal(root, filePath)) {
+    if (!(await isInsideRealAsync(root, filePath))) {
       return { content: 'Ruta fuera del directorio de salida', truncated: false, size: 0 }
     }
     try {
-      const stat = fs.statSync(filePath)
       const MAX = 4 * 1024 * 1024
-      const fd = fs.openSync(filePath, 'r')
+      const handle = await fs.promises.open(filePath, 'r')
       try {
+        const stat = await handle.stat()
         const bytes = Math.min(stat.size, MAX)
         const buffer = Buffer.alloc(bytes)
-        fs.readSync(fd, buffer, 0, bytes, 0)
+        await handle.read(buffer, 0, bytes, 0)
         return {
           content: buffer.toString('utf-8'),
           truncated: stat.size > MAX,
           size: stat.size
         }
       } finally {
-        fs.closeSync(fd)
+        await handle.close()
       }
     } catch {
       return { content: 'Error: no se pudo leer el archivo', truncated: false, size: 0 }
@@ -819,13 +830,58 @@ function setupIpcHandlers(): void {
   ipcMain.handle('archive:search', async (_event, query: string, limit = 120) => {
     const root = outputDir()
     if (!root || !query || query.trim().length < 2) {
-      return { hits: [], scanned: 0, truncated: false }
+      return { hits: [], scanned: 0, truncated: false, durationMs: 0 }
     }
     return searchArchive(root, query.trim(), limit)
   })
 
-  // --- Métricas del archivo ---
+  // --- Métricas del archivo y telemetría ---
   ipcMain.handle('app:get-stats', async () => db.getArchiveStats(outputDir()))
+  ipcMain.handle('app:get-perf-stats', async () => {
+    const mem = process.memoryUsage()
+    const caches = discordClient?.getCacheStats()
+    return {
+      rssBytes: mem.rss,
+      heapUsedBytes: mem.heapUsed,
+      heapTotalBytes: mem.heapTotal,
+      externalBytes: mem.external,
+      systemFreeBytes: os.freemem(),
+      systemTotalBytes: os.totalmem(),
+      cpuPercent: calcularUsoCpu(),
+      uptimeSeconds: Math.round(process.uptime()),
+      caches: {
+        usersSize: caches?.users ?? 0,
+        usersCapacity: caches?.maxUsers ?? 5000,
+        channelsSize: caches?.channels ?? 0,
+        channelsCapacity: caches?.maxChannels ?? 2000
+      },
+      db: db.getDbStats()
+    }
+  })
+  ipcMain.handle('app:optimize-memory', async () => {
+    const heapBeforeBytes = process.memoryUsage().heapUsed
+    const dbAntes = db.getDbStats()
+    let cachesCleared = 0
+    if (discordClient) {
+      const caches = discordClient.getCacheStats()
+      cachesCleared = caches.users + caches.channels
+      discordClient.clearCaches()
+    }
+    cachesCleared += downloadManager?.pruneFinishedTasks() ?? 0
+    db.optimizeMemory()
+    if (typeof (globalThis as { gc?: () => void }).gc === 'function') {
+      ;(globalThis as { gc: () => void }).gc()
+    }
+    const dbDespues = db.getDbStats()
+    const heapAfterBytes = process.memoryUsage().heapUsed
+    return {
+      heapBeforeBytes,
+      heapAfterBytes,
+      walBeforeBytes: dbAntes.walSizeBytes ?? 0,
+      walAfterBytes: dbDespues.walSizeBytes ?? 0,
+      cachesCleared
+    }
+  })
 
   // --- Enlaces externos (solo Discord) ---
   ipcMain.handle('app:open-external', async (_event, url: string) => {
@@ -940,29 +996,70 @@ async function scanDirectory(dirPath: string): Promise<FileEntry[]> {
     })
 
     const out: FileEntry[] = []
+    const files: { name: string; full: string }[] = []
+
     for (const entry of entries) {
-      if (budget-- <= 0) break
+      if (budget <= 0) break
       if (entry.name.startsWith('.')) continue
+      if (entry.isSymbolicLink()) continue
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
+        budget--
         out.push({ name: entry.name, path: full, type: 'dir', children: await walk(full, depth + 1) })
       } else if (entry.isFile()) {
-        let size = 0
-        try {
-          size = (await fs.promises.stat(full)).size
-        } catch { /* ignorar */ }
-        out.push({ name: entry.name, path: full, type: 'file', size })
+        budget--
+        files.push({ name: entry.name, full })
       }
     }
+
+    const STAT_BATCH_SIZE = 24
+    for (let i = 0; i < files.length; i += STAT_BATCH_SIZE) {
+      const batch = files.slice(i, i + STAT_BATCH_SIZE)
+      const resolved = await Promise.all(
+        batch.map(async (file) => {
+          let size = 0
+          try {
+            size = (await fs.promises.stat(file.full)).size
+          } catch { /* ignorar */ }
+          return { name: file.name, path: file.full, type: 'file' as const, size }
+        })
+      )
+      out.push(...resolved)
+      if (entries.length > 48 && i + STAT_BATCH_SIZE < files.length) {
+        await new Promise<void>((r) => setImmediate(r))
+      }
+    }
+
+    if (entries.length > 48) {
+      await new Promise<void>((r) => setImmediate(r))
+    }
+
     return out
   }
 
   return walk(dirPath, 0)
 }
 
-// ==================== Búsqueda en el archivo local ====================
+// ==================== Telemetría CPU y Búsqueda 2.0 ====================
 
-const EXTENSIONES_BUSCABLES = new Set(['.md', '.txt', '.html', '.json', '.csv'])
+let ultimoMuestreoCpu = process.cpuUsage()
+let ultimoInstanteCpu = process.hrtime.bigint()
+
+/** Calcula el % de CPU promedio usado por el proceso main desde la última lectura. */
+function calcularUsoCpu(): number {
+  const ahora = process.hrtime.bigint()
+  const deltaUs = process.cpuUsage(ultimoMuestreoCpu)
+  const transcurridoNs = Number(ahora - ultimoInstanteCpu)
+  ultimoMuestreoCpu = process.cpuUsage()
+  ultimoInstanteCpu = ahora
+  if (transcurridoNs <= 0) return 0
+  const nucleos = Math.max(1, os.cpus().length)
+  const cpuTotalUs = deltaUs.user + deltaUs.system
+  const porcentaje = (cpuTotalUs / ((transcurridoNs / 1000) * nucleos)) * 100
+  return Math.min(100, Math.round(porcentaje * 10) / 10)
+}
+
+const EXTENSIONES_BUSCABLES = new Set(['.md', '.txt', '.html', '.htm', '.json', '.csv', '.log', '.xml', '.yml', '.yaml', '.sql', '.css', '.js', '.ts', '.py', '.sh', '.ini', '.toml'])
 
 interface SearchHit {
   path: string
@@ -972,16 +1069,59 @@ interface SearchHit {
   excerpt: string
 }
 
+/** Normaliza texto para búsqueda insensible a tildes, diacríticos y mayúsculas. */
+function plegarTexto(texto: string): string {
+  return texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+/** Separa filtros `ext:...` de los términos de búsqueda reales. */
+function analizarConsultaBusqueda(query: string): { terminos: string[]; extensiones: Set<string> } {
+  const extensiones = new Set<string>()
+  const terminos: string[] = []
+  for (const parte of query.trim().split(/\s+/)) {
+    if (!parte) continue
+    const matchExt = /^ext:([a-z0-9.,_-]+)$/i.exec(parte)
+    if (matchExt) {
+      for (const raw of matchExt[1].split(',')) {
+        const limpia = raw.trim().toLowerCase().replace(/^\./, '')
+        if (limpia) extensiones.add(`.${limpia}`)
+      }
+      continue
+    }
+    const plegada = plegarTexto(parte)
+    if (plegada) terminos.push(plegada)
+  }
+  return { terminos, extensiones }
+}
+
+/** Extrae un extracto legible alrededor de la primera coincidencia de una línea. */
+function extraerExtractoLinea(lineaOriginal: string, lineaPlegada: string, terminos: string[]): string {
+  const limpia = lineaOriginal.trim()
+  if (limpia.length <= 200) return limpia.replace(/\s+/g, ' ')
+  const primerTermino = terminos.find((t) => lineaPlegada.includes(t))
+  const indicePlegado = primerTermino ? lineaPlegada.indexOf(primerTermino) : 0
+  const ratio = lineaPlegada.length > 0 ? Math.max(0, indicePlegado) / lineaPlegada.length : 0
+  const indiceAprox = Math.floor(ratio * lineaOriginal.length)
+  const desde = Math.max(0, indiceAprox - 60)
+  const hasta = Math.min(lineaOriginal.length, indiceAprox + 140)
+  return lineaOriginal.slice(desde, hasta).replace(/\s+/g, ' ').trim()
+}
+
 /**
  * Busca texto en los archivos del archivo local, sin salir de la app.
- * Se ignoran `assets/`, los directorios ocultos y los archivos grandes.
+ * Soporta búsqueda sin tildes, múltiples palabras (AND), filtros `ext:` y múltiples aciertos por archivo.
  */
 async function searchArchive(
   root: string,
   query: string,
   limit: number
-): Promise<{ hits: SearchHit[]; scanned: number; truncated: boolean }> {
-  const aguja = query.toLowerCase()
+): Promise<{ hits: SearchHit[]; scanned: number; truncated: boolean; durationMs: number }> {
+  const inicio = performance.now()
+  const { terminos, extensiones } = analizarConsultaBusqueda(query)
+  if (terminos.length === 0 && extensiones.size === 0) {
+    return { hits: [], scanned: 0, truncated: false, durationMs: 0 }
+  }
+
   const hits: SearchHit[] = []
   const pendientes: string[] = [root]
   let scanned = 0
@@ -989,6 +1129,7 @@ async function searchArchive(
 
   const MAX_ARCHIVOS = 4000
   const MAX_BYTES = 2 * 1024 * 1024
+  const MAX_HITS_POR_ARCHIVO = 8
 
   while (pendientes.length > 0 && hits.length < limit) {
     const dir = pendientes.shift()
@@ -1002,7 +1143,7 @@ async function searchArchive(
     }
 
     for (const entrada of entradas) {
-      if (entrada.name.startsWith('.') || entrada.name === 'assets') continue
+      if (entrada.name.startsWith('.')) continue
       // No se siguen enlaces simbólicos: podrían apuntar fuera del archivo.
       if (entrada.isSymbolicLink()) continue
       const ruta = path.join(dir, entrada.name)
@@ -1011,12 +1152,19 @@ async function searchArchive(
         pendientes.push(ruta)
         continue
       }
-      if (!EXTENSIONES_BUSCABLES.has(path.extname(entrada.name).toLowerCase())) continue
+
+      const ext = path.extname(entrada.name).toLowerCase()
+      if (!EXTENSIONES_BUSCABLES.has(ext)) continue
+      if (extensiones.size > 0 && !extensiones.has(ext)) continue
 
       scanned++
       if (scanned > MAX_ARCHIVOS) {
         truncated = true
         break
+      }
+
+      if (scanned % 50 === 0) {
+        await new Promise((r) => setImmediate(r))
       }
 
       let contenido: string
@@ -1028,29 +1176,70 @@ async function searchArchive(
         continue
       }
 
-      const indice = contenido.toLowerCase().indexOf(aguja)
-      if (indice === -1) continue
+      const relativo = path.relative(root, ruta).split(path.sep).join('/')
 
-      const inicioLinea = contenido.lastIndexOf('\n', indice) + 1
-      const finLinea = contenido.indexOf('\n', indice)
-      const fin = finLinea === -1 ? contenido.length : finLinea
-      const desde = Math.max(inicioLinea, indice - 60)
-      const hasta = Math.min(fin, indice + 140)
-
-      hits.push({
-        path: ruta,
-        name: entrada.name,
-        relative: path.relative(root, ruta).split(path.sep).join('/'),
-        line: contenido.slice(0, indice).split('\n').length,
-        excerpt: contenido.slice(desde, hasta).replace(/\s+/g, ' ').trim()
-      })
-
-      if (hits.length >= limit) {
-        truncated = true
-        break
+      if (terminos.length === 0) {
+        const primeraLinea = contenido.split('\n')[0] || entrada.name
+        hits.push({
+          path: ruta,
+          name: entrada.name,
+          relative: relativo,
+          line: 1,
+          excerpt: primeraLinea.slice(0, 180).replace(/\s+/g, ' ').trim() || '(Archivo coincidente)'
+        })
+        if (hits.length >= limit) {
+          truncated = true
+          break
+        }
+        continue
       }
+
+      const contenidoPlegado = plegarTexto(contenido)
+      if (!terminos.every((t) => contenidoPlegado.includes(t))) continue
+
+      const lineas = contenido.split('\n')
+      const hitsExactosLinea: SearchHit[] = []
+      const hitsParcialesLinea: SearchHit[] = []
+
+      for (let i = 0; i < lineas.length; i++) {
+        const lineaOriginal = lineas[i]
+        const lineaPlegada = plegarTexto(lineaOriginal)
+        const contieneAlguno = terminos.some((t) => lineaPlegada.includes(t))
+        if (!contieneAlguno) continue
+
+        const hit: SearchHit = {
+          path: ruta,
+          name: entrada.name,
+          relative: relativo,
+          line: i + 1,
+          excerpt: extraerExtractoLinea(lineaOriginal, lineaPlegada, terminos)
+        }
+
+        if (terminos.every((t) => lineaPlegada.includes(t))) {
+          hitsExactosLinea.push(hit)
+          if (hitsExactosLinea.length >= MAX_HITS_POR_ARCHIVO) break
+        } else if (hitsParcialesLinea.length < MAX_HITS_POR_ARCHIVO) {
+          hitsParcialesLinea.push(hit)
+        }
+      }
+
+      const seleccionados =
+        hitsExactosLinea.length > 0 ? hitsExactosLinea : hitsParcialesLinea
+      for (const hit of seleccionados) {
+        hits.push(hit)
+        if (hits.length >= limit) {
+          truncated = true
+          break
+        }
+      }
+      if (hits.length >= limit) break
     }
   }
 
-  return { hits, scanned, truncated }
+  return {
+    hits,
+    scanned,
+    truncated,
+    durationMs: Math.round(performance.now() - inicio)
+  }
 }

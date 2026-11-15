@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDown,
+  BookOpen,
+  Copy,
   Download,
   ExternalLink,
   FolderOpen,
+  Link2,
   MessageSquare,
-  RefreshCw
+  Paperclip,
+  Pin,
+  RefreshCw,
+  Search
 } from 'lucide-react'
 import type { DiscordMessage } from '../../core/discord/types'
 import { useBrowserStore } from '../stores/browserStore'
@@ -14,6 +20,13 @@ import { useDownloadStore } from '../stores/downloadStore'
 import { useUiStore } from '../stores/uiStore'
 import { showToast } from './Toast'
 import MessageStream from './message/MessageStream'
+import {
+  esErrorLimiteDiscord,
+  filtrarMensajesEnVivo,
+  formatearTranscripcionMarkdown,
+  mensajeDeErrorDiscord,
+  resumirEstadisticasChat
+} from './message/chatErrorUtils'
 
 /** Mensajes por página al leer un canal en vivo. */
 const TAMANO_PAGINA = 50
@@ -23,33 +36,6 @@ const UMBRAL_CARGA_PX = 120
 
 /** Distancia al fondo a partir de la cual aparece el botón «Ir al final». */
 const UMBRAL_SALTO_PX = 400
-
-/**
- * Traduce el error del IPC a algo accionable. El main envuelve el
- * `DiscordApiError` en el mensaje, así que buscamos el código o la frase.
- */
-function mensajeDeError(err: unknown): string {
-  const texto = err instanceof Error ? err.message : String(err)
-  if (/rate limited|429/i.test(texto)) {
-    return 'Discord limitó las peticiones. Espera unos segundos y reinténtalo.'
-  }
-  if (/403|access denied/i.test(texto)) {
-    return 'Esta cuenta no tiene permiso para leer este canal.'
-  }
-  if (/401|unauthorized/i.test(texto)) {
-    return 'La sesión ya no es válida. Vuelve a conectar tu cuenta en Ajustes.'
-  }
-  if (/404|unknown (channel|message)/i.test(texto)) {
-    return 'Este canal ya no existe o fue borrado.'
-  }
-  return 'No se pudo cargar el canal. Revisa la conexión e inténtalo de nuevo.'
-}
-
-/** true si el error es un límite de peticiones (merece un reintento). */
-function esLimite(err: unknown): boolean {
-  const texto = err instanceof Error ? err.message : String(err)
-  return /rate limited|429/i.test(texto)
-}
 
 /**
  * Conversación de un canal de texto. Se monta con el canal ya seleccionado y
@@ -63,6 +49,7 @@ export default function ChannelChatView() {
   const pickDirectory = useDownloadStore((s) => s.pickDirectory)
   const openOutputFolder = useDownloadStore((s) => s.openOutputFolder)
   const outputDir = useDownloadStore((s) => s.outputDir)
+  const queue = useDownloadStore((s) => s.queue)
 
   const [mensajes, setMensajes] = useState<DiscordMessage[]>([])
   const [hayMas, setHayMas] = useState(false)
@@ -70,7 +57,12 @@ export default function ChannelChatView() {
   const [cargandoAnteriores, setCargandoAnteriores] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [archivando, setArchivando] = useState(false)
+  const [rutaLocal, setRutaLocal] = useState<string | null>(null)
   const [lejosDelFondo, setLejosDelFondo] = useState(false)
+  const [consulta, setConsulta] = useState('')
+  const [soloAdjuntos, setSoloAdjuntos] = useState(false)
+  const [soloEnlaces, setSoloEnlaces] = useState(false)
+  const [soloFijados, setSoloFijados] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Altura y posición previas al prepend, para no saltar de sitio. */
@@ -79,6 +71,43 @@ export default function ChannelChatView() {
   const irAlFondoRef = useRef(false)
 
   const canalId = canal?.id ?? null
+
+  const hayFiltroActivo =
+    consulta.trim().length > 0 || soloAdjuntos || soloEnlaces || soloFijados
+  const estadisticas = useMemo(() => resumirEstadisticasChat(mensajes), [mensajes])
+  const mensajesFiltrados = useMemo(
+    () =>
+      filtrarMensajesEnVivo(mensajes, {
+        consulta,
+        soloAdjuntos,
+        soloEnlaces,
+        soloFijados
+      }),
+    [mensajes, consulta, soloAdjuntos, soloEnlaces, soloFijados]
+  )
+
+  const limpiarFiltros = useCallback(() => {
+    setConsulta('')
+    setSoloAdjuntos(false)
+    setSoloEnlaces(false)
+    setSoloFijados(false)
+  }, [])
+
+  const copiarTranscripcion = useCallback(async () => {
+    if (!canal || mensajesFiltrados.length === 0) return
+    const titulo = `#${canal.name ?? 'canal'}`
+    const markdown = formatearTranscripcionMarkdown(titulo, mensajesFiltrados)
+    try {
+      await navigator.clipboard.writeText(markdown)
+      showToast(
+        `Transcripción copiada (${mensajesFiltrados.length} ${mensajesFiltrados.length === 1 ? 'mensaje' : 'mensajes'})`,
+        'success'
+      )
+    } catch (err) {
+      console.error('No se pudo copiar la transcripción:', err)
+      showToast('No se pudo copiar la transcripción al portapapeles.', 'error')
+    }
+  }, [canal, mensajesFiltrados])
 
   const cargarInicial = useCallback(async (id: string) => {
     setCargando(true)
@@ -96,7 +125,7 @@ export default function ChannelChatView() {
         return
       } catch (err) {
         console.error('No se pudo cargar el canal:', err)
-        if (esLimite(err) && intento === 0) {
+        if (esErrorLimiteDiscord(err) && intento === 0) {
           setError('Discord limitó las peticiones. Reintentando…')
           await new Promise((r) => setTimeout(r, 2500))
           setError(null)
@@ -104,7 +133,7 @@ export default function ChannelChatView() {
         }
         setMensajes([])
         setHayMas(false)
-        setError(mensajeDeError(err))
+        setError(mensajeDeErrorDiscord(err, 'canal'))
         setCargando(false)
         return
       }
@@ -118,9 +147,36 @@ export default function ChannelChatView() {
     setHayMas(false)
     setError(null)
     setLejosDelFondo(false)
+    setConsulta('')
+    setSoloAdjuntos(false)
+    setSoloEnlaces(false)
+    setSoloFijados(false)
     prependRef.current = null
     void cargarInicial(canalId)
   }, [canalId, cargarInicial])
+
+  // Comprueba si el canal ya figura archivado en la caché local.
+  useEffect(() => {
+    if (!canalId) {
+      setRutaLocal(null)
+      return
+    }
+    let vigente = true
+    window.api.cache
+      .checkPost(canalId)
+      .then((post) => {
+        if (!vigente) return
+        const ruta = (post as { download_path?: string | null } | null)?.download_path
+        setRutaLocal(typeof ruta === 'string' && ruta.trim() ? ruta : null)
+      })
+      .catch(() => {
+        if (!vigente) return
+        setRutaLocal(null)
+      })
+    return () => {
+      vigente = false
+    }
+  }, [canalId, queue])
 
   // Reposiciona el scroll tras prepend o baja al fondo en la primera carga.
   useLayoutEffect(() => {
@@ -139,6 +195,15 @@ export default function ChannelChatView() {
       irAlFondoRef.current = false
     }
   }, [mensajes])
+
+  // Recalcula la visibilidad de «Ir al final» cuando el filtro cambia la altura del listado.
+  useEffect(() => {
+    const contenedor = scrollRef.current
+    if (!contenedor) return
+    const distanciaFondo =
+      contenedor.scrollHeight - contenedor.scrollTop - contenedor.clientHeight
+    setLejosDelFondo(distanciaFondo > UMBRAL_SALTO_PX)
+  }, [mensajesFiltrados])
 
   const cargarAnteriores = useCallback(async () => {
     if (!canalId || cargando || cargandoAnteriores || !hayMas || mensajes.length === 0) return
@@ -162,7 +227,7 @@ export default function ChannelChatView() {
     } catch (err) {
       console.error('No se pudieron cargar mensajes anteriores:', err)
       prependRef.current = null
-      showToast(mensajeDeError(err), 'error')
+      showToast(mensajeDeErrorDiscord(err, 'canal'), 'error')
     } finally {
       setCargandoAnteriores(false)
     }
@@ -177,8 +242,8 @@ export default function ChannelChatView() {
       contenedor.scrollHeight - contenedor.scrollTop - contenedor.clientHeight
     setLejosDelFondo(distanciaFondo > UMBRAL_SALTO_PX)
 
-    if (contenedor.scrollTop < UMBRAL_CARGA_PX) void cargarAnteriores()
-  }, [cargarAnteriores])
+    if (!hayFiltroActivo && contenedor.scrollTop < UMBRAL_CARGA_PX) void cargarAnteriores()
+  }, [cargarAnteriores, hayFiltroActivo])
 
   const irAlFinal = useCallback(() => {
     const contenedor = scrollRef.current
@@ -229,7 +294,21 @@ export default function ChannelChatView() {
         servidor?.name ?? '',
         canal.name ?? ''
       )
-      if (ok) showToast('Canal añadido a la cola de descarga', 'success')
+      if (ok) {
+        showToast('Canal añadido a la cola de descarga', 'success')
+        const idActual = canal.id
+        setTimeout(() => {
+          void window.api.cache
+            .checkPost(idActual)
+            .then((post) => {
+              if (useBrowserStore.getState().selectedChannel?.id === idActual) {
+                const ruta = (post as { download_path?: string | null } | null)?.download_path
+                setRutaLocal(typeof ruta === 'string' && ruta.trim() ? ruta : null)
+              }
+            })
+            .catch(() => {})
+        }, 1200)
+      }
     } finally {
       setArchivando(false)
     }
@@ -287,7 +366,14 @@ export default function ChannelChatView() {
     <>
       <header className="workspace__header">
         <div className="workspace__titles">
-          <div className="workspace__title truncate">#{canal.name ?? 'canal'}</div>
+          <div className="row" style={{ gap: 'var(--sp-2)' }}>
+            <div className="workspace__title truncate">#{canal.name ?? 'canal'}</div>
+            {rutaLocal && (
+              <span className="badge badge--ok" title="Canal ya descargado en el archivo local">
+                En archivo
+              </span>
+            )}
+          </div>
           <div className="workspace__subtitle truncate">{subtitulo}</div>
         </div>
 
@@ -308,6 +394,17 @@ export default function ChannelChatView() {
             <Download size={14} strokeWidth={1.8} />
             {archivando ? 'Archivando…' : 'Archivar'}
           </button>
+          {rutaLocal && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => useUiStore.getState().abrirArchivo(rutaLocal)}
+              title="Abrir canal en el visor integrado"
+            >
+              <BookOpen size={14} strokeWidth={1.8} />
+              Abrir en visor
+            </button>
+          )}
           <button className="btn btn--ghost btn--sm" onClick={abrirEnDiscord}>
             <ExternalLink size={14} strokeWidth={1.8} />
             Abrir en Discord
@@ -326,6 +423,101 @@ export default function ChannelChatView() {
       </header>
 
       <div className="workspace__body">
+        {!cargando && !error && mensajes.length > 0 && (
+          <div
+            className="row"
+            style={{
+              flexWrap: 'wrap',
+              padding: 'var(--sp-2) var(--sp-6)',
+              borderBottom: '1px solid var(--line-soft)',
+              background: 'var(--surface-0)',
+              flexShrink: 0
+            }}
+          >
+            <div className="search" style={{ flex: '1 1 200px', minWidth: 160 }}>
+              <Search size={14} strokeWidth={1.8} className="search__icon" />
+              <input
+                className="input input--search"
+                type="search"
+                placeholder="Filtrar texto, archivo o de:usuario…"
+                aria-label="Filtrar mensajes"
+                value={consulta}
+                onChange={(e) => setConsulta(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && (consulta.length > 0 || hayFiltroActivo)) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (consulta.length > 0) {
+                      setConsulta('')
+                    } else {
+                      limpiarFiltros()
+                    }
+                  }
+                }}
+                style={{ height: 28, fontSize: 'var(--text-sm)' }}
+              />
+            </div>
+
+            <button
+              type="button"
+              className={`chip${soloAdjuntos ? ' chip--active' : ''}`}
+              onClick={() => setSoloAdjuntos((v) => !v)}
+              aria-pressed={soloAdjuntos}
+            >
+              <Paperclip size={12} strokeWidth={1.8} />
+              Adjuntos
+            </button>
+
+            <button
+              type="button"
+              className={`chip${soloEnlaces ? ' chip--active' : ''}`}
+              onClick={() => setSoloEnlaces((v) => !v)}
+              aria-pressed={soloEnlaces}
+            >
+              <Link2 size={12} strokeWidth={1.8} />
+              Enlaces
+            </button>
+
+            <button
+              type="button"
+              className={`chip${soloFijados ? ' chip--active' : ''}`}
+              onClick={() => setSoloFijados((v) => !v)}
+              aria-pressed={soloFijados}
+            >
+              <Pin size={12} strokeWidth={1.8} />
+              Fijados
+              {estadisticas.fijados > 0 && (
+                <span className="mono">{estadisticas.fijados}</span>
+              )}
+            </button>
+
+            <span
+              className="muted"
+              style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
+              title={`${estadisticas.total} mensajes · ${estadisticas.enlaces} con enlaces · ${estadisticas.fijados} fijados`}
+            >
+              {estadisticas.autores} autores · {estadisticas.adjuntos} adjuntos
+            </span>
+
+            {hayFiltroActivo && (
+              <span className="muted mono" style={{ fontSize: 'var(--text-xs)' }}>
+                {mensajesFiltrados.length} / {mensajes.length}
+              </span>
+            )}
+
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => void copiarTranscripcion()}
+              disabled={mensajesFiltrados.length === 0}
+              title="Copiar transcripción en Markdown"
+            >
+              <Copy size={13} strokeWidth={1.8} />
+              Copiar transcripción
+            </button>
+          </div>
+        )}
+
         <div className="chat__scroll" ref={scrollRef} onScroll={alDesplazar}>
           {cargando ? (
             <div className="col">
@@ -357,13 +549,26 @@ export default function ChannelChatView() {
                 Todavía no hay nada escrito aquí, o tu cuenta no puede leer el historial.
               </div>
             </div>
+          ) : mensajesFiltrados.length === 0 ? (
+            <div className="empty">
+              <div className="empty__icon">
+                <Search size={18} strokeWidth={1.8} />
+              </div>
+              <div className="empty__title">Sin coincidencias</div>
+              <div className="empty__text">
+                Ningún mensaje cargado coincide con los filtros activos.
+              </div>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={limpiarFiltros}>
+                Limpiar filtros
+              </button>
+            </div>
           ) : (
             <>
               {textoBanner && (
                 <div className="chat__banner muted">{textoBanner}</div>
               )}
               <MessageStream
-                mensajes={mensajes}
+                mensajes={mensajesFiltrados}
                 onAbrirHilo={abrirHiloDelMensaje}
                 onAbrirEnDiscord={abrirMensajeEnDiscord}
               />
@@ -371,7 +576,7 @@ export default function ChannelChatView() {
           )}
         </div>
 
-        {lejosDelFondo && !cargando && !error && (
+        {lejosDelFondo && !cargando && !error && mensajesFiltrados.length > 0 && (
           <button className="chat__salto btn btn--sm" onClick={irAlFinal}>
             <ArrowDown size={14} strokeWidth={1.8} />
             Ir al final

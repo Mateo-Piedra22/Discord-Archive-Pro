@@ -1,7 +1,10 @@
 import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import {
+  ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Compass,
   Hash,
   Image as ImageIcon,
@@ -16,7 +19,7 @@ import {
 } from 'lucide-react'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useDownloadStore } from '../../stores/downloadStore'
-import { filterBrowseChannels } from '../../channelFilters'
+import { filterBrowseChannels, sortBrowseChannels } from '../../channelFilters'
 import type { ChannelTypeFilters } from '../../channelFilters'
 import { isForum, isMessageCapable, type DiscordChannel } from '../../../core/discord/types'
 
@@ -104,6 +107,7 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
   const { strictChannelFiltering } = useDownloadStore()
 
   const [plegadas, setPlegadas] = useState<Set<string>>(new Set())
+  const [ordenCanales, setOrdenCanales] = useState<'position' | 'name'>('position')
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const visibles = useMemo<DiscordChannel[]>(() => {
@@ -134,19 +138,41 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
     const lista: { categoria: DiscordChannel | null; canales: DiscordChannel[] }[] = []
 
     categorias.forEach((categoria) => {
-      const hijos = visibles.filter((canal) => canal.parent_id === categoria.id)
+      const hijos = sortBrowseChannels(
+        visibles.filter((canal) => canal.type !== 4 && canal.parent_id === categoria.id),
+        ordenCanales
+      )
       if (hijos.length > 0) lista.push({ categoria, canales: hijos })
     })
 
-    const sueltos = visibles.filter(
-      (canal) =>
-        canal.type !== 4 &&
-        (!canal.parent_id || !categorias.some((c) => c.id === canal.parent_id))
+    const sueltos = sortBrowseChannels(
+      visibles.filter(
+        (canal) =>
+          canal.type !== 4 &&
+          (!canal.parent_id || !categorias.some((c) => c.id === canal.parent_id))
+      ),
+      ordenCanales
     )
     if (sueltos.length > 0) lista.push({ categoria: null, canales: sueltos })
 
     return lista
-  }, [categorias, visibles])
+  }, [categorias, visibles, ordenCanales])
+
+  const totalVisibles = useMemo(
+    () => grupos.reduce((total, grupo) => total + grupo.canales.length, 0),
+    [grupos]
+  )
+
+  const clavesGrupos = useMemo(
+    () => grupos.map((grupo, indice) => grupo.categoria?.id ?? `sin-categoria-${indice}`),
+    [grupos]
+  )
+
+  const todoPlegado = clavesGrupos.length > 0 && clavesGrupos.every((clave) => plegadas.has(clave))
+
+  const alternarTodo = () => {
+    setPlegadas(todoPlegado ? new Set() : new Set(clavesGrupos))
+  }
 
   const alternarGrupo = (clave: string) => {
     setPlegadas((previas) => {
@@ -190,7 +216,7 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
             {selectedGuild
               ? typeof selectedGuild.approximate_member_count === 'number'
                 ? `${selectedGuild.approximate_member_count.toLocaleString('es')} miembros`
-                : `${visibles.length} canales`
+                : `${totalVisibles} ${totalVisibles === 1 ? 'canal' : 'canales'}`
               : 'Ningún servidor activo'}
           </span>
         </div>
@@ -246,6 +272,37 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
               {label}
             </button>
           ))}
+        </div>
+        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <span className="mono dim" style={{ fontSize: 'var(--text-xs)' }}>
+            {totalVisibles} {totalVisibles === 1 ? 'canal' : 'canales'}
+          </span>
+          <div className="row" style={{ gap: 'var(--sp-1)' }}>
+            <button
+              type="button"
+              className={`chip${ordenCanales === 'name' ? ' chip--active' : ''}`}
+              onClick={() => setOrdenCanales((prev) => (prev === 'position' ? 'name' : 'position'))}
+              title="Alternar orden de canales"
+              aria-pressed={ordenCanales === 'name'}
+            >
+              <ArrowUpDown size={12} strokeWidth={1.8} />
+              {ordenCanales === 'position' ? 'Posición' : 'A–Z'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={alternarTodo}
+              disabled={clavesGrupos.length === 0}
+              title={todoPlegado ? 'Expandir todas las categorías' : 'Plegar todas las categorías'}
+            >
+              {todoPlegado ? (
+                <ChevronsUpDown size={13} strokeWidth={1.8} />
+              ) : (
+                <ChevronsDownUp size={13} strokeWidth={1.8} />
+              )}
+              {todoPlegado ? 'Expandir todo' : 'Plegar todo'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -310,6 +367,13 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
                     const activo = selectedChannel?.id === canal.id
                     const seleccionable = isMessageCapable(canal.type) || isForum(canal.type)
                     const etiquetas = canal.available_tags?.length ?? 0
+                    const nombreCanal = getChannelName(canal)
+                    const temaCanal = canal.topic?.trim()
+                    const tituloFila = seleccionable
+                      ? temaCanal
+                        ? `${nombreCanal} — ${temaCanal}`
+                        : nombreCanal
+                      : 'Este canal no contiene mensajes'
 
                     return (
                       <div
@@ -320,7 +384,7 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
                         tabIndex={0}
                         aria-current={activo ? 'true' : undefined}
                         aria-disabled={!seleccionable}
-                        title={seleccionable ? getChannelName(canal) : 'Este canal no contiene mensajes'}
+                        title={tituloFila}
                         onClick={seleccionable ? () => selectChannel(canal) : undefined}
                         onKeyDown={(e) => {
                           if (!seleccionable) return
@@ -334,7 +398,7 @@ export default function SidebarCanales({ onAbrirSelector }: Props) {
                         <span className="canales__icono">
                           <ChannelIcon type={canal.type} />
                         </span>
-                        <span className="canales__nombre truncate">{getChannelName(canal)}</span>
+                        <span className="canales__nombre truncate">{nombreCanal}</span>
                         {etiquetas > 0 && <span className="canales__meta">{etiquetas} etiq.</span>}
                       </div>
                     )

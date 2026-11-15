@@ -84,4 +84,48 @@ describe('FolderBuilder', () => {
     expect(fs.existsSync(first)).toBe(true)
     expect(fs.existsSync(second)).toBe(true)
   })
+
+  it('protege nombres de dispositivo reservados de Windows anteponiendo _ y respetando maxFilenameLength', () => {
+    const builder = new FolderBuilder(
+      makeOptions({ outputDir: root, folderStructure: 'flat', namingPattern: '{title}' })
+    )
+
+    expect(builder.sanitizeDirName('CON')).toBe('_CON')
+    expect(builder.sanitizeDirName('aux.txt')).toBe('_aux.txt')
+    expect(builder.sanitizeDirName('LPT1')).toBe('_LPT1')
+    expect(builder.sanitizeDirName('com9.tar.gz')).toBe('_com9.tar.gz')
+    expect(builder.sanitizeDirName('..nul')).toBe('_nul')
+
+    const shortBuilder = new FolderBuilder(makeOptions({ outputDir: root, maxFilenameLength: 3 }))
+    expect(shortBuilder.sanitizeDirName('CON')).toBe('_CO')
+    expect(shortBuilder.sanitizeDirName('con_largo')).toBe('_co')
+
+    // En Windows createPostDirectory debe poder crear carpetas reales sin fallar
+    const dirCon = builder.createPostDirectory('S', 'C', 'CON')
+    const dirAux = builder.createPostDirectory('S', 'C', 'aux.txt')
+    const dirLpt = builder.createPostDirectory('S', 'C', 'LPT1')
+    expect(path.basename(dirCon)).toBe('_CON')
+    expect(path.basename(dirAux)).toBe('_aux.txt')
+    expect(path.basename(dirLpt)).toBe('_LPT1')
+    expect(fs.existsSync(dirCon)).toBe(true)
+    expect(fs.existsSync(dirAux)).toBe(true)
+    expect(fs.existsSync(dirLpt)).toBe(true)
+  })
+
+  it('soporta placeholders {server} y {channel} saneados en namingPattern', () => {
+    const builder = new FolderBuilder(
+      makeOptions({
+        outputDir: root,
+        folderStructure: 'flat',
+        namingPattern: '{num}_{server}_{channel}_{title}'
+      })
+    )
+
+    const created = builder.createPostDirectory('Mi:Server?', 'foro/general', 'Hilo*{server}')
+    expect(path.basename(created)).toBe('001_Mi_Server__foro_general_Hilo_{server}')
+    expect(fs.existsSync(created)).toBe(true)
+
+    const reservedServer = builder.createPostDirectory('CON', 'LPT1', 'aux.txt')
+    expect(path.basename(reservedServer)).toBe('002__CON__LPT1__aux.txt')
+  })
 })

@@ -53,7 +53,7 @@ export interface StoreSchema {
   strictChannelFiltering: boolean
 }
 
-class JsonStore {
+export class JsonStore {
   private data: StoreSchema
   private filePath: string
 
@@ -83,18 +83,41 @@ class JsonStore {
     this.save()
   }
 
+  setMany(partial: Partial<StoreSchema>): void {
+    const clean = Object.fromEntries(
+      Object.entries(partial).filter(([, value]) => value !== undefined)
+    ) as Partial<StoreSchema>
+    this.data = { ...this.data, ...clean }
+    this.save()
+  }
+
   private save(): void {
+    const serialized = JSON.stringify(this.data, null, 2)
+    const tmpPath = `${this.filePath}.tmp`
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8')
+      fs.writeFileSync(tmpPath, serialized, 'utf-8')
+      try {
+        fs.renameSync(tmpPath, this.filePath)
+      } catch {
+        fs.writeFileSync(this.filePath, serialized, 'utf-8')
+      }
     } catch (err) {
       console.error('[Store] Failed to save:', err)
+    } finally {
+      try {
+        if (fs.existsSync(tmpPath)) {
+          fs.unlinkSync(tmpPath)
+        }
+      } catch {
+        // Ignorar fallo al limpiar el archivo temporal.
+      }
     }
   }
 }
 
 let store: JsonStore | null = null
 
-const DEFAULTS: StoreSchema = {
+export const DEFAULTS: StoreSchema = {
   prefsVersion: 3,
   encryptedToken: null,
   windowBounds: null,
@@ -273,4 +296,8 @@ export function getAllPreferences(): Omit<StoreSchema, 'encryptedToken'> {
     minimizeToTray: s.get('minimizeToTray'),
     strictChannelFiltering: s.get('strictChannelFiltering')
   }
+}
+
+export function setManyPreferences(partial: Partial<StoreSchema>): void {
+  getStore().setMany(partial)
 }

@@ -1,6 +1,8 @@
 // ============================================================
-// Genera resources/icon.ico a partir de formas vectoriales.
+// Genera resources/icon.ico, resources/icon-512.png y resources/icon.png
+// a partir de formas vectoriales.
 // Sin dependencias: PNG/ICO/BMP escritos a mano.
+// Mantener paleta y geometría sincronizadas con resources/logo-mark.svg.
 // Uso: node scripts/generate-icon.js
 // ============================================================
 
@@ -94,8 +96,7 @@ function render(size) {
             cb = BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * t
             ca = 1
 
-            // Borde blurple (anillo)
-            // Filo interior tenue: separa la marca del borde del icono.
+            // Anillo interior sutil (#3a3f48): separa la marca del borde del icono.
             const outer = roundRect(0.018, 0.018, 0.964, 0.964, 0.175)(nx, ny)
             const inner = roundRect(0.03, 0.03, 0.94, 0.94, 0.165)(nx, ny)
             if (outer && !inner) {

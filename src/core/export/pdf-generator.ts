@@ -45,7 +45,7 @@ export class PdfGenerator {
     let font: PDFFont
     let unicode = false
     try {
-      const bytes = fs.readFileSync(PdfGenerator.fontPath())
+      const bytes = await fs.promises.readFile(PdfGenerator.fontPath())
       font = await doc.embedFont(new Uint8Array(bytes), { subset: true })
       unicode = true
     } catch {
@@ -77,7 +77,12 @@ export class PdfGenerator {
       y -= size + 4
     }
 
-    const drawWrapped = (value: string, size: number, indent = 0): void => {
+    const drawWrapped = (
+      value: string,
+      size: number,
+      indent = 0,
+      color = rgb(0.15, 0.15, 0.17)
+    ): void => {
       const maxWidth = PAGE_WIDTH - MARGIN * 2 - indent
       for (const paragraph of text(value).split('\n')) {
         if (!paragraph.trim()) {
@@ -86,7 +91,7 @@ export class PdfGenerator {
         }
         for (const line of wrapText(paragraph, size, maxWidth, (t, s) => font.widthOfTextAtSize(t, s))) {
           ensureSpace(size + 4)
-          page.drawText(line, { x: MARGIN + indent, y, size, font, color: rgb(0.15, 0.15, 0.17) })
+          page.drawText(line, { x: MARGIN + indent, y, size, font, color })
           y -= LINE_HEIGHT
         }
       }
@@ -94,7 +99,8 @@ export class PdfGenerator {
 
     const drawImage = async (relativePath: string): Promise<void> => {
       const filePath = path.join(outputDir, relativePath.split('/').join(path.sep))
-      if (!fs.existsSync(filePath)) return
+      const exists = await fs.promises.access(filePath).then(() => true, () => false)
+      if (!exists) return
       try {
         const buffer = await sharp(filePath)
           .resize({ width: 420, withoutEnlargement: true })
@@ -129,6 +135,17 @@ export class PdfGenerator {
 
       ensureSpace(40)
       drawLine(`${author} · ${when}`, 9, rgb(0.36, 0.4, 0.55))
+
+      if (msg.referenced_message) {
+        const ref = msg.referenced_message
+        const refAuthor = ref.author?.global_name || ref.author?.username || 'Usuario'
+        const rawRef = stripMarkdown(ref.content || '').replace(/\s+/g, ' ').trim()
+        const refSnippet = rawRef.length > 90
+          ? `${rawRef.slice(0, 87)}...`
+          : rawRef || (ref.attachments?.length ? `[${ref.attachments.length} adjunto(s)]` : '(sin texto)')
+        drawLine(`↳ Respondiendo a ${refAuthor}: ${refSnippet}`, 8.5, rgb(0.45, 0.48, 0.54), 10)
+      }
+
       drawWrapped(stripMarkdown(msg.content || ''), FONT_SIZE)
 
       for (const attachment of msg.attachments) {
@@ -141,15 +158,61 @@ export class PdfGenerator {
         }
       }
 
+      if (msg.embeds && msg.embeds.length > 0) {
+        for (const embed of msg.embeds) {
+          const title = (embed.title || embed.author?.name || '').trim()
+          const rawDesc = stripMarkdown(embed.description || '').replace(/\s+/g, ' ').trim()
+          const desc = rawDesc.length > 220 ? `${rawDesc.slice(0, 217)}...` : rawDesc
+          if (title) {
+            drawLine(`[Embed] ${title}`, 9, rgb(0.3, 0.35, 0.65), 10)
+          }
+          if (desc) {
+            drawWrapped(desc, 9, 10, rgb(0.35, 0.37, 0.42))
+          }
+          if (!title && !desc && embed.url) {
+            drawLine(`[Embed] ${embed.url}`, 9, rgb(0.3, 0.35, 0.65), 10)
+          }
+        }
+      }
+
+      if (msg.reactions && msg.reactions.length > 0) {
+        const summary = msg.reactions
+          .map((r) => `${r.emoji.name || 'emoji'} (${r.count})`)
+          .join(' · ')
+        drawWrapped(`Reacciones: ${summary}`, 8.5, 10, rgb(0.4, 0.4, 0.45))
+      }
+
       y -= 6
       if (i > 0 && i % YIELD_EVERY === 0) {
         await new Promise<void>((resolve) => setImmediate(resolve))
       }
     }
 
+    const pages = doc.getPages()
+    const totalPages = pages.length
+    const footerSize = 8
+    for (let idx = 0; idx < totalPages; idx++) {
+      const p = pages[idx]
+      const footerText = text(`Página ${idx + 1} de ${totalPages} · Estrato`)
+      let footerWidth: number
+      try {
+        footerWidth = font.widthOfTextAtSize(footerText, footerSize)
+      } catch {
+        footerWidth = footerText.length * footerSize * 0.5
+      }
+      const { width: pageWidth } = p.getSize()
+      p.drawText(footerText, {
+        x: Math.max(MARGIN, pageWidth - MARGIN - footerWidth),
+        y: 24,
+        size: footerSize,
+        font,
+        color: rgb(0.5, 0.5, 0.55)
+      })
+    }
+
     const bytes = await doc.save()
     const filePath = path.join(outputDir, 'export.pdf')
-    fs.writeFileSync(filePath, bytes)
+    await fs.promises.writeFile(filePath, bytes)
     return filePath
   }
 }

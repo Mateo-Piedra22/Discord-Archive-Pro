@@ -1,22 +1,72 @@
 // ============================================================
 // Colecciones — Detección automática de lo que hay en la carpeta
-// de salida. Cada carpeta que contiene post.md, thread.md o
-// index.md es una colección: una publicación exportada.
+// de salida. Cada carpeta que contiene post.md, thread.md,
+// index.md, post.html, post.json, post.csv, messages.csv,
+// export.pdf o export.epub es una colección: una publicación
+// exportada.
 // ============================================================
 
+import { useEffect, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import type { ArchiveFileEntry } from '../../../shared/api'
 
 const ICONO_TRAZO = 1.8
 
+/** Colecciones visibles por tramo antes de mostrar «Cargar más». */
+export const TAMANO_PAGINA_COLECCIONES = 60
+
 /** Extensiones que se muestran como imagen en portada y galería. */
 export const EXT_IMAGEN = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif']
 
+/** Extensiones de vídeo reproducibles en la galería multimedia. */
+export const EXT_VIDEO = ['mp4', 'webm', 'mov', 'mkv', 'ogv']
+
+/** Extensiones de audio reproducibles en la galería multimedia. */
+export const EXT_AUDIO = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac']
+
 /** Archivos que marcan una carpeta como colección. */
-const MARCAS = new Set(['index.md', 'post.md', 'thread.md'])
+const MARCAS = new Set([
+  'index.md',
+  'post.md',
+  'thread.md',
+  'post.html',
+  'post.json',
+  'post.csv',
+  'messages.csv',
+  'export.pdf',
+  'export.epub'
+])
 
 /** Orden de preferencia para el documento que abre la colección. */
-const ORDEN_DOCUMENTO = ['post.md', 'thread.md', 'index.md']
+const ORDEN_DOCUMENTO = [
+  'post.md',
+  'thread.md',
+  'index.md',
+  'post.html',
+  'post.json',
+  'post.csv',
+  'messages.csv',
+  'export.pdf',
+  'export.epub'
+]
+
+const ETIQUETAS_FORMATO: Record<string, string> = {
+  'post.md': 'MD',
+  'thread.md': 'HILO',
+  'index.md': 'ÍNDICE',
+  'post.html': 'HTML',
+  'post.json': 'JSON',
+  'post.csv': 'CSV',
+  'messages.csv': 'CSV',
+  'export.pdf': 'PDF',
+  'export.epub': 'EPUB'
+}
+
+function etiquetaFormato(nombre: string, tienePostCsv: boolean): string {
+  const clave = nombre.toLowerCase()
+  if (clave === 'messages.csv' && tienePostCsv) return 'CSV · MSGS'
+  return ETIQUETAS_FORMATO[clave] ?? nombre.toUpperCase()
+}
 
 /** Formato de fecha del archivo, en español y sin ceros a la izquierda. */
 const FORMATO_FECHA = new Intl.DateTimeFormat('es-ES', {
@@ -42,8 +92,14 @@ export interface Coleccion {
   documentos: number
   /** Mensajes del hilo, contando el original. */
   mensajes: number
+  /** Archivos .md dentro de `replies/`, ordenados numéricamente. */
+  respuestasArchivos: ArchiveFileEntry[]
   /** Imágenes encontradas en toda la carpeta. */
   imagenes: ArchiveFileEntry[]
+  /** Todos los archivos multimedia (imágenes, vídeos y audio) de la colección. */
+  multimedia: ArchiveFileEntry[]
+  /** Formatos exportados encontrados en la raíz de la colección, ordenados según preferencia. */
+  formatos: ArchiveFileEntry[]
   /** Peso total en bytes. */
   bytes: number
   /** Primera imagen de `assets/`, si existe. */
@@ -133,11 +189,20 @@ interface Medidas {
   bytes: number
   documentos: number
   respuestas: number
+  respuestasArchivos: ArchiveFileEntry[]
   imagenes: ArchiveFileEntry[]
+  multimedia: ArchiveFileEntry[]
 }
 
 function medir(nodo: ArchiveFileEntry): Medidas {
-  const medidas: Medidas = { bytes: 0, documentos: 0, respuestas: 0, imagenes: [] }
+  const medidas: Medidas = {
+    bytes: 0,
+    documentos: 0,
+    respuestas: 0,
+    respuestasArchivos: [],
+    imagenes: [],
+    multimedia: []
+  }
 
   const recorrer = (entradas: ArchiveFileEntry[]): void => {
     for (const entrada of entradas) {
@@ -147,7 +212,13 @@ function medir(nodo: ArchiveFileEntry): Medidas {
       }
       medidas.bytes += entrada.size ?? 0
       if (MARCAS.has(entrada.name.toLowerCase())) medidas.documentos++
-      if (EXT_IMAGEN.includes(extensionDe(entrada.name))) medidas.imagenes.push(entrada)
+      const ext = extensionDe(entrada.name)
+      if (EXT_IMAGEN.includes(ext)) {
+        medidas.imagenes.push(entrada)
+        medidas.multimedia.push(entrada)
+      } else if (EXT_VIDEO.includes(ext) || EXT_AUDIO.includes(ext)) {
+        medidas.multimedia.push(entrada)
+      }
     }
   }
 
@@ -155,9 +226,11 @@ function medir(nodo: ArchiveFileEntry): Medidas {
 
   // Cada respuesta individual se guarda como un .md dentro de `replies/`.
   const respuestas = (nodo.children ?? []).find((hijo) => hijo.type === 'dir' && hijo.name === 'replies')
-  medidas.respuestas = (respuestas?.children ?? []).filter(
-    (hijo) => hijo.type === 'file' && extensionDe(hijo.name) === 'md'
-  ).length
+  const respuestasArchivos = (respuestas?.children ?? [])
+    .filter((hijo) => hijo.type === 'file' && extensionDe(hijo.name) === 'md')
+    .sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }))
+  medidas.respuestas = respuestasArchivos.length
+  medidas.respuestasArchivos = respuestasArchivos
 
   return medidas
 }
@@ -194,10 +267,10 @@ export function detectarColecciones(arbol: ArchiveFileEntry[], raiz: string): Co
       if (marcas.length > 0) {
         const medidas = medir(nodo)
         const partes = relativa(nodo.path, raiz).split('/').filter(Boolean)
-        const principal =
-          ORDEN_DOCUMENTO
-            .map((nombre) => archivos.find((hijo) => hijo.name.toLowerCase() === nombre))
-            .find((hijo): hijo is ArchiveFileEntry => Boolean(hijo)) ?? null
+        const formatos = ORDEN_DOCUMENTO
+          .map((nombre) => archivos.find((hijo) => hijo.name.toLowerCase() === nombre))
+          .filter((hijo): hijo is ArchiveFileEntry => Boolean(hijo))
+        const principal = formatos[0] ?? null
 
         colecciones.push({
           ruta: nodo.path,
@@ -208,7 +281,10 @@ export function detectarColecciones(arbol: ArchiveFileEntry[], raiz: string): Co
           fecha: fechaDeNombre(nodo.name),
           documentos: medidas.documentos,
           mensajes: medidas.respuestas + (principal ? 1 : 0),
+          respuestasArchivos: medidas.respuestasArchivos,
           imagenes: medidas.imagenes,
+          multimedia: medidas.multimedia,
+          formatos,
           bytes: medidas.bytes,
           portada: primeraImagen(nodo),
           principal,
@@ -233,63 +309,121 @@ interface PropsColecciones {
 }
 
 export default function Colecciones({ colecciones, onAbrir }: PropsColecciones) {
+  const [limiteVisible, setLimiteVisible] = useState(TAMANO_PAGINA_COLECCIONES)
+
+  // Al cambiar la lista filtrada u ordenada, volvemos al primer tramo.
+  useEffect(() => {
+    setLimiteVisible(TAMANO_PAGINA_COLECCIONES)
+  }, [colecciones])
+
+  const visibles =
+    colecciones.length > limiteVisible ? colecciones.slice(0, limiteVisible) : colecciones
+
   return (
-    <div className="colecciones">
-      {colecciones.map((coleccion) => {
-        const canal = etiquetaCanal(coleccion.canal)
+    <>
+      <div className="colecciones">
+        {visibles.map((coleccion) => {
+          const canal = etiquetaCanal(coleccion.canal)
+          const tienePostCsv = coleccion.formatos.some(
+            (fmt) => fmt.name.toLowerCase() === 'post.csv'
+          )
+          const otrosMedios = coleccion.multimedia.length - coleccion.imagenes.length
 
-        return (
-          <div
-            key={coleccion.ruta}
-            className="coleccion"
-            role="button"
-            tabIndex={0}
-            onClick={() => onAbrir(coleccion)}
-            onKeyDown={(evento) => {
-              if (evento.key === 'Enter' || evento.key === ' ') {
-                evento.preventDefault()
-                onAbrir(coleccion)
-              }
-            }}
-            title={coleccion.ruta}
+          return (
+            <div
+              key={coleccion.ruta}
+              className="coleccion"
+              role="button"
+              tabIndex={0}
+              onClick={() => onAbrir(coleccion)}
+              onKeyDown={(evento) => {
+                if (evento.key === 'Enter' || evento.key === ' ') {
+                  evento.preventDefault()
+                  onAbrir(coleccion)
+                }
+              }}
+              title={coleccion.ruta}
+            >
+              {coleccion.portada ? (
+                <img
+                  className="coleccion__portada"
+                  src={window.api.archive.toUrl(coleccion.portada)}
+                  alt=""
+                  loading="lazy"
+                />
+              ) : (
+                <div className="coleccion__portada" aria-hidden="true" />
+              )}
+
+              <div className="coleccion__cuerpo">
+                <div className="coleccion__titulo truncate">{coleccion.titulo}</div>
+
+                <div className="coleccion__meta truncate">
+                  {[canal, coleccion.servidor].filter(Boolean).join(' · ') || 'Archivo local'}
+                </div>
+
+                <div className="coleccion__meta truncate">
+                  {textoFecha(coleccion.fecha)} · {coleccion.mensajes} mensajes ·{' '}
+                  {formatearBytes(coleccion.bytes)}
+                </div>
+
+                <div className="coleccion__meta truncate">
+                  {coleccion.documentos}{' '}
+                  {coleccion.documentos === 1 ? 'publicación' : 'publicaciones'} ·{' '}
+                  {coleccion.imagenes.length}{' '}
+                  {coleccion.imagenes.length === 1 ? 'imagen' : 'imágenes'}
+                  {otrosMedios > 0 && ` · ${otrosMedios} ${otrosMedios === 1 ? 'medio' : 'medios'}`}
+                </div>
+
+                {coleccion.formatos.length > 0 && (
+                  <div className="coleccion__formatos">
+                    {coleccion.formatos.map((fmt) => (
+                      <span key={fmt.path} className="coleccion__formato-tag">
+                        {etiquetaFormato(fmt.name, tienePostCsv)}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="coleccion__acciones">
+                <ChevronRight size={15} strokeWidth={ICONO_TRAZO} className="dim" />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {colecciones.length > limiteVisible && (
+        <div
+          className="row"
+          style={{
+            justifyContent: 'center',
+            padding: 'var(--sp-3) var(--sp-5)',
+            borderTop: '1px solid var(--line-soft)',
+            flexShrink: 0
+          }}
+        >
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() =>
+              setLimiteVisible((prev) =>
+                Math.min(colecciones.length, prev + TAMANO_PAGINA_COLECCIONES)
+              )
+            }
           >
-            {coleccion.portada ? (
-              <img
-                className="coleccion__portada"
-                src={window.api.archive.toUrl(coleccion.portada)}
-                alt=""
-                loading="lazy"
-              />
-            ) : (
-              <div className="coleccion__portada" aria-hidden="true" />
-            )}
-
-            <div className="coleccion__cuerpo">
-              <div className="coleccion__titulo truncate">{coleccion.titulo}</div>
-
-              <div className="coleccion__meta truncate">
-                {[canal, coleccion.servidor].filter(Boolean).join(' · ') || 'Archivo local'}
-              </div>
-
-              <div className="coleccion__meta truncate">
-                {textoFecha(coleccion.fecha)} · {coleccion.mensajes} mensajes ·{' '}
-                {formatearBytes(coleccion.bytes)}
-              </div>
-
-              <div className="coleccion__meta truncate">
-                {coleccion.documentos}{' '}
-                {coleccion.documentos === 1 ? 'publicación' : 'publicaciones'} ·{' '}
-                {coleccion.imagenes.length}{' '}
-                {coleccion.imagenes.length === 1 ? 'imagen' : 'imágenes'}
-              </div>
-            </div>
-
-            <div className="coleccion__acciones">
-              <ChevronRight size={15} strokeWidth={ICONO_TRAZO} className="dim" />
-            </div>
-          </div>
-        )
-      })}
-    </div>
+            Cargar más (mostrando {visibles.length} de {colecciones.length})
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setLimiteVisible(colecciones.length)}
+          >
+            Mostrar todas
+          </button>
+        </div>
+      )}
+    </>
   )
 }

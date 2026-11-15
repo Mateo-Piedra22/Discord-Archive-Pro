@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   Compass, DownloadCloud, Archive, Settings2, Info, LayoutDashboard,
-  Minus, Square, Copy, X, Sun, Moon, Loader2, Command, Search
+  Minus, Square, Copy, X, Sun, Moon, BookOpen, Loader2, Command, Search
 } from 'lucide-react'
 import { useAuthStore } from './stores/authStore'
 import { useBrowserStore } from './stores/browserStore'
@@ -37,11 +37,28 @@ const VISTAS: { id: Vista; etiqueta: string; icono: typeof Compass }[] = [
   { id: 'legal', etiqueta: 'Legal', icono: Info }
 ]
 
+export type TemaApp = 'dark' | 'light' | 'sepia'
+
 const TEMA_KEY = 'ui_theme'
 
-function leerTema(): 'dark' | 'light' {
-  const guardado = localStorage.getItem(TEMA_KEY)
-  return guardado === 'light' ? 'light' : 'dark'
+const INFO_TEMA: Record<TemaApp, { nombre: string; corto: string; themeColor: string }> = {
+  dark: { nombre: 'Tinta oscura', corto: 'Oscuro', themeColor: '#0e1116' },
+  light: { nombre: 'Papel claro', corto: 'Claro', themeColor: '#f6f4ef' },
+  sepia: { nombre: 'Pergamino sepia', corto: 'Sepia', themeColor: '#efe8d8' }
+}
+
+function normalizarTema(valor: string | null | undefined): TemaApp {
+  return valor === 'light' || valor === 'sepia' ? valor : 'dark'
+}
+
+function leerTema(): TemaApp {
+  return normalizarTema(localStorage.getItem(TEMA_KEY))
+}
+
+function siguienteTema(actual: TemaApp): TemaApp {
+  if (actual === 'dark') return 'light'
+  if (actual === 'light') return 'sepia'
+  return 'dark'
 }
 
 function Cargando() {
@@ -66,13 +83,34 @@ export default function App() {
   } = useUiStore()
 
   const [maximizado, setMaximizado] = useState(false)
-  const [tema, setTema] = useState<'dark' | 'light'>(leerTema)
+  const [tema, setTema] = useState<TemaApp>(leerTema)
 
   // Tema: se aplica en <html> para que también afecte a los portales.
   useEffect(() => {
     document.documentElement.dataset.theme = tema
     localStorage.setItem(TEMA_KEY, tema)
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', INFO_TEMA[tema].themeColor)
   }, [tema])
+
+  // Sincronización del tema cuando cambia desde Ajustes o la Paleta de comandos.
+  useEffect(() => {
+    const alCambiarTema = (evento: Event) => {
+      const siguiente = normalizarTema((evento as CustomEvent<string>).detail)
+      setTema((actual) => (actual === siguiente ? actual : siguiente))
+    }
+    window.addEventListener('dap:theme', alCambiarTema)
+    return () => window.removeEventListener('dap:theme', alCambiarTema)
+  }, [])
+
+  const rotarTema = () => {
+    const next = siguienteTema(tema)
+    setTema(next)
+    document.documentElement.dataset.theme = next
+    localStorage.setItem(TEMA_KEY, next)
+    window.dispatchEvent(new CustomEvent<TemaApp>('dap:theme', { detail: next }))
+  }
 
   // Arranque: validar sesión, escuchar la cola y restaurar el zoom.
   useEffect(() => {
@@ -260,10 +298,18 @@ export default function App() {
               </button>
               <button
                 className="rail__item"
-                onClick={() => setTema(tema === 'dark' ? 'light' : 'dark')}
-                title={tema === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+                onClick={rotarTema}
+                title={`Tema actual: ${INFO_TEMA[tema].nombre} · Cambiar a ${INFO_TEMA[siguienteTema(tema)].nombre}`}
+                aria-label={`Tema actual: ${INFO_TEMA[tema].nombre}. Cambiar a ${INFO_TEMA[siguienteTema(tema)].nombre}`}
               >
-                {tema === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                {tema === 'dark' ? (
+                  <Moon size={16} />
+                ) : tema === 'light' ? (
+                  <Sun size={16} />
+                ) : (
+                  <BookOpen size={16} />
+                )}
+                <span className="rail__label">{INFO_TEMA[tema].corto}</span>
               </button>
             </div>
           </nav>

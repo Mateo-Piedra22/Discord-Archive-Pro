@@ -51,7 +51,8 @@ const api = {
     checkPost: (threadId: string) => ipcRenderer.invoke('cache:check-post', threadId),
     checkStatus: (threadId: string) => ipcRenderer.invoke('cache:check-status', threadId),
     getCachedPosts: (channelId: string) => ipcRenderer.invoke('cache:get-cached-posts', channelId),
-    clear: () => ipcRenderer.invoke('cache:clear')
+    clear: () => ipcRenderer.invoke('cache:clear'),
+    verifyIntegrity: () => ipcRenderer.invoke('cache:verify-integrity')
   },
 
   // Descargas
@@ -71,6 +72,8 @@ const api = {
     cancelAll: () => ipcRenderer.invoke('download:cancel-all'),
     clearCompleted: () => ipcRenderer.invoke('download:clear-completed'),
     retry: (taskId: string) => ipcRenderer.invoke('download:retry', taskId),
+    retryAllFailed: () => ipcRenderer.invoke('download:retry-all-failed'),
+    removeTask: (taskId: string) => ipcRenderer.invoke('download:remove-task', taskId),
     setConcurrency: (n: number) => ipcRenderer.invoke('download:set-concurrency', n),
 
     onTaskStarted: (cb: (task: unknown) => void) => subscribe<[unknown]>('download:task-started', cb),
@@ -111,6 +114,8 @@ const api = {
 
   app: {
     getStats: () => ipcRenderer.invoke('app:get-stats'),
+    getPerfStats: () => ipcRenderer.invoke('app:get-perf-stats'),
+    optimizeMemory: () => ipcRenderer.invoke('app:optimize-memory'),
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url)
   },
 

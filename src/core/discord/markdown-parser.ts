@@ -60,12 +60,15 @@ export class DiscordMarkdownParser {
 
   private async resolveMentions(text: string): Promise<string> {
     const mentionRegex = /<@!?(\d+)>/g
-    const matches = [...text.matchAll(mentionRegex)]
+    const uniqueUserIds = new Set<string>()
+    for (const match of text.matchAll(mentionRegex)) {
+      uniqueUserIds.add(match[1])
+    }
+    if (uniqueUserIds.size === 0) return text
 
-    for (const match of matches) {
-      const userId = match[1]
-      let username = `@unknown-user`
-
+    const resolved = new Map<string, string>()
+    for (const userId of uniqueUserIds) {
+      let username = '@unknown-user'
       const cached = this.context.users.get(userId)
       if (cached) {
         username = `@${cached.global_name || cached.username}`
@@ -80,11 +83,10 @@ export class DiscordMarkdownParser {
           // Se deja la mención sin procesar
         }
       }
-
-      text = text.replace(match[0], `**${username}**`)
+      resolved.set(userId, `**${username}**`)
     }
 
-    return text
+    return text.replace(mentionRegex, (_match, userId: string) => resolved.get(userId) ?? '**@unknown-user**')
   }
 
   private resolveRoleMentions(text: string): string {
@@ -102,13 +104,19 @@ export class DiscordMarkdownParser {
   }
 
   private resolveTimestamps(text: string): string {
-    return text.replace(/<t:(\d+)(?::([tTdDfFR]))?>/g, (_match, timestamp: string, format: string) => {
-      const date = new Date(parseInt(timestamp) * 1000)
-      return this.formatTimestamp(date, format || 'f')
-    })
+    return text.replace(
+      /<t:(-?\d+)(?::([tTdDfFR]))?>/g,
+      (match, timestamp: string, format?: string) => {
+        const date = new Date(parseInt(timestamp, 10) * 1000)
+        if (Number.isNaN(date.getTime())) return match
+        return this.formatTimestamp(date, format || 'f')
+      }
+    )
   }
 
   private formatTimestamp(date: Date, format: string): string {
+    if (Number.isNaN(date.getTime())) return ''
+
     const options: Intl.DateTimeFormatOptions = {}
 
     switch (format) {
@@ -151,7 +159,7 @@ export class DiscordMarkdownParser {
     }
 
     try {
-      return date.toLocaleDateString('es-ES', options)
+      return new Intl.DateTimeFormat('es-ES', options).format(date)
     } catch {
       return date.toISOString()
     }
@@ -179,10 +187,13 @@ export class DiscordMarkdownParser {
   private resolveCustomEmojis(text: string, assetMap?: Map<string, string>): string {
     // Emoji estático: <:name:id>
     // Emoji animado: <a:name:id>
-    return text.replace(/<(a?):(\w+):(\d+)>/g, (_match, animated: string, name: string, id: string) => {
-      const url = ENDPOINTS.CUSTOM_EMOJI(id, animated === 'a')
-      return `![${name}](${this.resolveAsset(url, assetMap)})`
-    })
+    return text.replace(
+      /<(a?):([A-Za-z0-9_~-]+):(\d+)>/g,
+      (_match, animated: string, name: string, id: string) => {
+        const url = ENDPOINTS.CUSTOM_EMOJI(id, animated === 'a')
+        return `![${name}](${this.resolveAsset(url, assetMap)})`
+      }
+    )
   }
 
   private convertSpoilers(text: string): string {

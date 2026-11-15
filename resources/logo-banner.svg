@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-labelledby="estrato-banner-title estrato-banner-desc">
+  <title id="estrato-banner-title">Estrato — Archivo vivo de comunidades (v2.5 · Flujo 100% in-app)</title>
+  <desc id="estrato-banner-desc">Banner editorial de Estrato v2.5: archivo local autónomo de Discord con flujo 100% in-app, explorador de archivos integrado, visores todo-en-uno (MD, HTML, JSON, CSV, PDF, EPUB, SVG, código y MEDIA) y SQLite local.</desc>
+
+  <defs>
+    <!-- Cuadrícula fina de archivo -->
+    <pattern id="banner-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="1" />
+    </pattern>
+
+    <!-- Gradiente del isotipo -->
+    <linearGradient id="banner-mark-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1d22" />
+      <stop offset="100%" stop-color="#0d0f12" />
+    </linearGradient>
+
+    <!-- Línea geológica sutil en cobre -->
+    <linearGradient id="strata-rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c9873f" stop-opacity="0.38" />
+      <stop offset="65%" stop-color="#c9873f" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#c9873f" stop-opacity="0" />
+    </linearGradient>
+
+    <clipPath id="banner-clip-top">
+      <rect x="110.08" y="140.8" width="291.84" height="64" rx="11.264" />
+    </clipPath>
+    <clipPath id="banner-clip-mid">
+      <rect x="140.8" y="227.84" width="230.4" height="64" rx="11.264" />
+    </clipPath>
+    <clipPath id="banner-clip-low">
+      <rect x="176.64" y="314.88" width="158.72" height="64" rx="11.264" />
+    </clipPath>
+  </defs>
+
+  <!-- Lienzo tinta cálida -->
+  <rect x="0" y="0" width="1200" height="340" rx="16" fill="#111316" />
+  <rect x="0" y="0" width="1200" height="340" rx="16" fill="url(#banner-grid)" />
+
+  <!-- Líneas geológicas finas en el borde derecho -->
+  <g fill="none" stroke="url(#strata-rule)" stroke-width="1">
+    <line x1="308" y1="48" x2="1152" y2="48" />
+    <line x1="880" y1="76" x2="1152" y2="76" />
+    <line x1="940" y1="104" x2="1152" y2="104" />
+    <line x1="308" y1="296" x2="1152" y2="296" />
+  </g>
+
+  <!-- Marco interior discreto -->
+  <rect
+    x="1"
+    y="1"
+    width="1198"
+    height="338"
+    rx="15"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.08"
+    stroke-width="1"
+  />
+
+  <!-- Isotipo de los tres estratos a la izquierda (184×184 centrado verticalmente) -->
+  <g transform="translate(76, 78) scale(0.359375)">
+    <rect x="0" y="0" width="512" height="512" rx="94.72" fill="url(#banner-mark-bg)" />
+    <rect
+      x="12.288"
+      y="12.288"
+      width="487.424"
+      height="487.424"
+      rx="87.04"
+      fill="none"
+      stroke="#3a3f48"
+      stroke-width="6.144"
+    />
+    <rect x="110.08" y="140.8" width="291.84" height="64" rx="11.264" fill="#e0a45c" />
+    <rect
+      x="110.08"
+      y="140.8"
+      width="291.84"
+      height="9.216"
+      fill="#f0c48a"
+      fill-opacity="0.85"
+      clip-path="url(#banner-clip-top)"
+    />
+    <rect x="140.8" y="227.84" width="230.4" height="64" rx="11.264" fill="#c9873f" />
+    <rect
+      x="140.8"
+      y="227.84"
+      width="230.4"
+      height="8.192"
+      fill="#f0c48a"
+      fill-opacity="0.5"
+      clip-path="url(#banner-clip-mid)"
+    />
+    <rect x="176.64" y="314.88" width="158.72" height="64" rx="11.264" fill="#965f2a" />
+    <rect
+      x="176.64"
+      y="314.88"
+      width="158.72"
+      height="7.168"
+      fill="#f0c48a"
+      fill-opacity="0.3"
+      clip-path="url(#banner-clip-low)"
+    />
+  </g>
+
+  <!-- Antetítulo e insignia de versión editorial -->
+  <rect x="308" y="84" width="32" height="3" rx="1.5" fill="#c9873f" />
+  <text
+    x="352"
+    y="90"
+    fill="#c9873f"
+    font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif"
+    font-size="11.5"
+    font-weight="600"
+    letter-spacing="2.2"
+  >
+    v2.5 · FLUJO 100% IN-APP
+  </text>
+
+  <!-- Marca tipográfica serif editorial -->
+  <text
+    x="306"
+    y="162"
+    fill="#e8e9ec"
+    font-family="'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, 'Noto Serif', serif"
+    font-size="72"
+    font-weight="600"
+    letter-spacing="-1.4"
+  >
+    Estrato
+  </text>
+
+  <!-- Subtítulo -->
+  <text
+    x="308"
+    y="200"
+    fill="#a5abb6"
+    font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif"
+    font-size="22"
+    font-weight="400"
+  >
+    Archivo vivo de comunidades · Lectura e inspección 100 % in-app
+  </text>
+
+  <!-- Píldoras discretas de capacidades -->
+  <g font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif" font-size="13" font-weight="500">
+    <!-- Formatos y visores integrados -->
+    <rect x="308" y="232" width="420" height="34" rx="6" fill="#161a21" stroke="#2a313b" stroke-width="1" />
+    <text x="518" y="253.5" text-anchor="middle" fill="#d5d9e0">
+      MD · HTML · JSON · CSV · PDF · EPUB · MEDIA
+    </text>
+
+    <!-- Motor local -->
+    <rect x="740" y="232" width="144" height="34" rx="6" fill="#161a21" stroke="#2a313b" stroke-width="1" />
+    <text x="812" y="253.5" text-anchor="middle" fill="#d5d9e0">
+      SQLite WAL Local
+    </text>
+
+    <!-- Visor integrado -->
+    <rect x="896" y="232" width="224" height="34" rx="6" fill="#211a13" stroke="#c9873f" stroke-opacity="0.45" stroke-width="1" />
+    <text x="1008" y="253.5" text-anchor="middle" fill="#f0c48a">
+      Visores Todo-en-Uno In-App
+    </text>
+  </g>
+</svg>

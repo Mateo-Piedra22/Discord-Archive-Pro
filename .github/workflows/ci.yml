@@ -1,6 +1,5 @@
-# Verificación en cada push y pull request.
-# No empaqueta: solo comprueba que el proyecto compila y que los tests pasan,
-# para que un fallo se vea en minutos y no al publicar.
+# Verificación continua en cada push y pull request hacia main.
+# Valida tipos, tests, compilación y auditoría de recursos en Linux sin empaquetar.
 name: CI
 
 on:
@@ -19,7 +18,7 @@ concurrency:
 
 jobs:
   verificar:
-    name: Tipos, tests y build
+    name: Tipos, tests, build y lanzamiento
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -39,30 +38,94 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Tipos
+        id: typecheck
         run: npm run typecheck
 
       - name: Tests
-        run: npm test
+        id: test
+        run: npm test -- --run
 
       - name: Build
+        id: build
         run: npm run build
 
-      - name: Comprobar que el icono está generado
+      - name: Verificar lanzamiento y recursos
+        id: verify
+        run: npm run verify:release
+
+      - name: Resumen de verificación
+        if: always()
+        env:
+          OUTCOME_TYPECHECK: ${{ steps.typecheck.outcome }}
+          OUTCOME_TEST: ${{ steps.test.outcome }}
+          OUTCOME_BUILD: ${{ steps.build.outcome }}
+          OUTCOME_VERIFY: ${{ steps.verify.outcome }}
         run: |
-          test -f resources/icon.ico
-          test -f resources/icon.png
-          node -e "
-            const fs = require('fs');
-            const png = fs.readFileSync('resources/icon.png');
-            if (png.slice(0, 8).toString('hex') !== '89504e470d0a1a0a') {
-              console.error('resources/icon.png no es un PNG válido');
-              process.exit(1);
-            }
-            const ico = fs.readFileSync('resources/icon.ico');
-            const n = ico.readUInt16LE(4);
-            if (n < 5) {
-              console.error('resources/icon.ico tiene muy pocos tamaños: ' + n);
-              process.exit(1);
-            }
-            console.log('icon.png 512 y icon.ico con ' + n + ' tamaños');
-          "
+          node --input-type=module << 'EOF'
+          import fs from 'node:fs'
+          import {
+            validateElectronSecurityConfig,
+            validateIcoBuffer,
+            validatePngBuffer,
+            validateSvgContent
+          } from './scripts/verify-release.mjs'
+
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY
+          if (!summaryPath) process.exit(0)
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+
+          const checkPng = (file) => {
+            if (!fs.existsSync(file)) return 'ausente'
+            const res = validatePngBuffer(fs.readFileSync(file), 512)
+            return res.ok ? `${res.width}x${res.height} RGBA` : `error (${res.error})`
+          }
+
+          const checkIco = (file) => {
+            if (!fs.existsSync(file)) return 'ausente'
+            const res = validateIcoBuffer(fs.readFileSync(file), 5)
+            return res.ok ? `${res.count} tamaños (${res.sizes.join(', ')})` : `error (${res.error})`
+          }
+
+          const checkSvg = (file) => {
+            if (!fs.existsSync(file)) return 'ausente'
+            const res = validateSvgContent(fs.readFileSync(file, 'utf8'))
+            return res.ok ? 'SVG seguro y válido' : `error (${res.error})`
+          }
+
+          const checkElectronSecurity = (file) => {
+            if (!fs.existsSync(file)) return 'ausente'
+            const res = validateElectronSecurityConfig(fs.readFileSync(file, 'utf8'))
+            return res.ok
+              ? 'nodeIntegration: false · contextIsolation: true · sandbox: true · webSecurity: true'
+              : `error (${res.errors.join('; ')})`
+          }
+
+          const fontFile = 'resources/fonts/Roboto-Regular.ttf'
+          const fontInfo = fs.existsSync(fontFile)
+            ? `${(fs.statSync(fontFile).size / 1024).toFixed(1)} KB`
+            : 'ausente'
+
+          const lines = [
+            `## Verificación CI — ${pkg.build?.productName || pkg.name} v${pkg.version}`,
+            '',
+            '| Comprobación | Resultado |',
+            '|---|---|',
+            `| Tipos (\`npm run typecheck\`) | \`${process.env.OUTCOME_TYPECHECK}\` |`,
+            `| Tests (\`npm test -- --run\`) | \`${process.env.OUTCOME_TEST}\` |`,
+            `| Build (\`npm run build\`) | \`${process.env.OUTCOME_BUILD}\` |`,
+            `| Lanzamiento (\`npm run verify:release\`) | \`${process.env.OUTCOME_VERIFY}\` |`,
+            '',
+            '### Estado de recursos e invariantes de seguridad',
+            `- \`src/main/index.ts\` (invariantes Electron): ${checkElectronSecurity('src/main/index.ts')}`,
+            `- \`resources/icon.png\`: ${checkPng('resources/icon.png')}`,
+            `- \`resources/icon-512.png\`: ${checkPng('resources/icon-512.png')}`,
+            `- \`resources/icon.ico\`: ${checkIco('resources/icon.ico')}`,
+            `- \`resources/logo-mark.svg\`: ${checkSvg('resources/logo-mark.svg')}`,
+            `- \`resources/logo-banner.svg\`: ${checkSvg('resources/logo-banner.svg')}`,
+            `- \`resources/fonts/Roboto-Regular.ttf\`: ${fontInfo}`,
+            ''
+          ]
+
+          fs.appendFileSync(summaryPath, lines.join('\n'), 'utf8')
+          EOF

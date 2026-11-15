@@ -4,6 +4,7 @@
 // ============================================================
 
 import { ENDPOINTS } from './endpoints'
+import { LruCache } from './lru-cache'
 import { RateLimiter } from './rate-limiter'
 import { isForum, isMessageCapable } from './types'
 import type {
@@ -15,6 +16,15 @@ import type {
   ForumPost,
   ThreadSearchResponse
 } from './types'
+
+export function compareSnowflakes(a: string, b: string): number {
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+    const ba = BigInt(a)
+    const bb = BigInt(b)
+    return ba < bb ? -1 : ba > bb ? 1 : 0
+  }
+  return a.localeCompare(b)
+}
 
 export class DiscordApiError extends Error {
   constructor(
@@ -31,8 +41,9 @@ export class DiscordApiError extends Error {
 export class DiscordClient {
   private token: string
   private rateLimiter: RateLimiter
-  private userCache = new Map<string, DiscordUser>()
-  private channelCache = new Map<string, DiscordChannel>()
+  private userCache = new LruCache<string, DiscordUser>(5000)
+  private channelCache = new LruCache<string, DiscordChannel>(2000)
+  private guildCache = new LruCache<string, DiscordGuild>(500)
 
   constructor(token: string) {
     this.token = token
@@ -41,6 +52,30 @@ export class DiscordClient {
 
   get limiter(): RateLimiter {
     return this.rateLimiter
+  }
+
+  getCacheStats(): {
+    users: number
+    maxUsers: number
+    channels: number
+    maxChannels: number
+    guilds: number
+    maxGuilds: number
+  } {
+    return {
+      users: this.userCache.size,
+      maxUsers: this.userCache.capacity,
+      channels: this.channelCache.size,
+      maxChannels: this.channelCache.capacity,
+      guilds: this.guildCache.size,
+      maxGuilds: this.guildCache.capacity
+    }
+  }
+
+  clearCaches(): void {
+    this.userCache.clear()
+    this.channelCache.clear()
+    this.guildCache.clear()
   }
 
   // ----------- Autenticación y usuario -----------
@@ -62,15 +97,22 @@ export class DiscordClient {
 
   async getGuilds(): Promise<DiscordGuild[]> {
     const guilds = await this.request<DiscordGuild[]>('GET', ENDPOINTS.GUILDS, 'guilds:list')
+    for (const guild of guilds) {
+      this.guildCache.set(guild.id, guild)
+    }
     return guilds
   }
 
   async getGuild(guildId: string): Promise<DiscordGuild> {
-    return this.request<DiscordGuild>(
+    const cached = this.guildCache.get(guildId)
+    if (cached) return cached
+    const guild = await this.request<DiscordGuild>(
       'GET',
       `${ENDPOINTS.GUILD(guildId)}?with_counts=true`,
       `guild:${guildId}`
     )
+    this.guildCache.set(guildId, guild)
+    return guild
   }
 
   // ----------- Canales -----------
@@ -115,6 +157,7 @@ export class DiscordClient {
       offset?: number
       limit?: number
       archived?: boolean
+      signal?: AbortSignal
     } = {}
   ): Promise<ThreadSearchResponse> {
     const params = new URLSearchParams()
@@ -130,7 +173,13 @@ export class DiscordClient {
     if (options.archived !== undefined) params.set('archived', options.archived.toString())
 
     const url = `${ENDPOINTS.THREAD_SEARCH(channelId)}?${params.toString()}`
-    return this.request<ThreadSearchResponse>('GET', url, `threads:search:${channelId}`)
+    return this.request<ThreadSearchResponse>(
+      'GET',
+      url,
+      `threads:search:${channelId}`,
+      undefined,
+      options.signal
+    )
   }
 
   // Ampliado: admite un token de cancelación ligero para poder abortar
@@ -140,10 +189,18 @@ export class DiscordClient {
   async getAllForumPosts(
     channelId: string,
     onProgress?: (count: number, total: number) => void,
-    // forma del token de cancelación: objeto mutable simple comprobado periódicamente
-    cancellationToken?: { cancelled?: boolean }
+    // forma del token de cancelación: objeto mutable simple o AbortSignal comprobado periódicamente
+    cancellationToken?: { cancelled?: boolean; signal?: AbortSignal }
   ): Promise<ForumPost[]> {
+    if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+      throw new Error('fetch_cancelled')
+    }
+
     const channel = await this.getChannel(channelId)
+
+    if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+      throw new Error('fetch_cancelled')
+    }
 
     // Foros y canales de media: se navegan como lista de posts (threads).
     if (isForum(channel.type)) {
@@ -190,7 +247,7 @@ export class DiscordClient {
   private async searchAllForumPosts(
     channel: DiscordChannel,
     onProgress?: (count: number, total: number) => void,
-    cancellationToken?: { cancelled?: boolean }
+    cancellationToken?: { cancelled?: boolean; signal?: AbortSignal }
   ): Promise<ForumPost[]> {
     const tagMap = new Map((channel.available_tags || []).map(t => [t.id, t]))
 
@@ -200,20 +257,37 @@ export class DiscordClient {
     let total = 0
 
     while (true) {
-      if (cancellationToken?.cancelled) throw new Error('fetch_cancelled')
+      if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+        throw new Error('fetch_cancelled')
+      }
 
-      const result = await this.searchForumThreads(channel.id, {
-        sort_by: 'creation_time',
-        sort_order: 'desc',
-        offset,
-        limit
-      })
+      let result: ThreadSearchResponse
+      try {
+        result = await this.searchForumThreads(channel.id, {
+          sort_by: 'creation_time',
+          sort_order: 'desc',
+          offset,
+          limit,
+          signal: cancellationToken?.signal
+        })
+      } catch (error) {
+        if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+          throw new Error('fetch_cancelled')
+        }
+        throw error
+      }
+
+      if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+        throw new Error('fetch_cancelled')
+      }
 
       if (total === 0) total = result.total_results
       onProgress?.(allPosts.length, total)
 
       for (const thread of result.threads) {
-        if (cancellationToken?.cancelled) throw new Error('fetch_cancelled')
+        if (cancellationToken?.cancelled || cancellationToken?.signal?.aborted) {
+          throw new Error('fetch_cancelled')
+        }
 
         const postTags = (thread.applied_tags || [])
           .map(tagId => tagMap.get(tagId))
@@ -259,7 +333,7 @@ export class DiscordClient {
 
   async getThreadMessages(
     threadId: string,
-    options: { before?: string; after?: string; limit?: number } = {}
+    options: { before?: string; after?: string; limit?: number; signal?: AbortSignal } = {}
   ): Promise<DiscordMessage[]> {
     const params = new URLSearchParams()
     if (options.before) params.set('before', options.before)
@@ -267,32 +341,49 @@ export class DiscordClient {
     params.set('limit', (options.limit || 100).toString())
 
     const url = `${ENDPOINTS.CHANNEL_MESSAGES(threadId)}?${params.toString()}`
-    return this.request<DiscordMessage[]>('GET', url, `messages:${threadId}`)
+    return this.request<DiscordMessage[]>('GET', url, `messages:${threadId}`, undefined, options.signal)
   }
 
   /**
    * Obtiene todos los mensajes de un canal/hilo.
-   * - Si se indica `afterId` → paginación delta hacia delante (solo mensajes más nuevos).
-   * - En caso contrario → paginación hacia atrás desde el mensaje más reciente.
-   * El resultado se deduplica por id y se ordena del más antiguo al más nuevo.
+   * - Admite token de cancelación cooperativa (`{ cancelled?: boolean; signal?: AbortSignal; afterId?: string }`)
+   *   o `afterId` directo como string para paginación delta hacia delante.
+   * - El resultado se deduplica por id y se ordena del más antiguo al más nuevo.
    */
   async getAllThreadMessages(
     threadId: string,
     onProgress?: (count: number) => void,
-    afterId?: string
+    cancellationOrAfterId?: string | { cancelled?: boolean; signal?: AbortSignal; afterId?: string },
+    maxPages = 10_000
   ): Promise<DiscordMessage[]> {
+    const tokenObj =
+      typeof cancellationOrAfterId === 'object' && cancellationOrAfterId !== null
+        ? cancellationOrAfterId
+        : undefined
+    const afterId =
+      typeof cancellationOrAfterId === 'string'
+        ? cancellationOrAfterId
+        : tokenObj?.afterId
+
     const seen = new Map<string, DiscordMessage>()
     const forward = Boolean(afterId)
     let cursor: string | undefined = afterId
     const limit = 100
 
-    // Tope duro: 100 páginas × 100 mensajes = 10 mil mensajes por llamada.
     // Tope de seguridad: 10.000 páginas × 100 mensajes = 1.000.000 de mensajes.
     // El corte real lo marca el cursor, que debe avanzar en cada vuelta.
-    for (let page = 0; page < 10_000; page++) {
+    for (let page = 0; page < maxPages; page++) {
+      if (tokenObj?.cancelled || tokenObj?.signal?.aborted) {
+        throw new Error('Descarga cancelada')
+      }
+
       const messages = forward
-        ? await this.getThreadMessages(threadId, { after: cursor, limit })
-        : await this.getThreadMessages(threadId, { before: cursor, limit })
+        ? await this.getThreadMessages(threadId, { after: cursor, limit, signal: tokenObj?.signal })
+        : await this.getThreadMessages(threadId, { before: cursor, limit, signal: tokenObj?.signal })
+
+      if (tokenObj?.cancelled || tokenObj?.signal?.aborted) {
+        throw new Error('Descarga cancelada')
+      }
 
       if (messages.length === 0) break
 
@@ -303,9 +394,15 @@ export class DiscordClient {
 
       if (messages.length < limit) break
 
-      // `after` y `before` devuelven ambos en orden ascendente, así que la última
-      // entrada es la más nueva para `after` y la más antigua para `before`.
-      const next = messages[messages.length - 1].id
+      // En paginación hacia delante (`after`) avanzamos desde el ID mayor;
+      // en paginación hacia atrás (`before`) avanzamos desde el ID menor.
+      let next = messages[0].id
+      for (let i = 1; i < messages.length; i++) {
+        const id = messages[i].id
+        if (forward ? compareSnowflakes(id, next) > 0 : compareSnowflakes(id, next) < 0) {
+          next = id
+        }
+      }
       if (next === cursor) break // el cursor no avanzó → se detiene en vez de repetir para siempre
       cursor = next
     }
@@ -313,7 +410,10 @@ export class DiscordClient {
     return [...seen.values()].sort((a, b) => {
       const ta = Date.parse(a.timestamp)
       const tb = Date.parse(b.timestamp)
-      return ta === tb ? a.id.localeCompare(b.id) : ta - tb
+      if (ta === tb || Number.isNaN(ta) || Number.isNaN(tb)) {
+        return compareSnowflakes(a.id, b.id)
+      }
+      return ta - tb
     })
   }
 
@@ -343,12 +443,15 @@ export class DiscordClient {
     method: string,
     url: string,
     route: string,
-    body?: unknown
+    body?: unknown,
+    signal?: AbortSignal
   ): Promise<T> {
     let lastError: Error | null = null
     const maxRetries = 3
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (signal?.aborted) throw new Error('Operación cancelada')
+
       let response: Response
       try {
         response = await this.rateLimiter.execute(route, async () => {
@@ -358,13 +461,14 @@ export class DiscordClient {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
 
-          const fetchOptions: RequestInit = { method, headers }
+          const fetchOptions: RequestInit = { method, headers, signal }
           if (body) fetchOptions.body = JSON.stringify(body)
 
           return fetch(url, fetchOptions)
-        })
+        }, 0, signal)
       } catch (error) {
-        // Fallo de red o rechazo de la cola: se reintenta salvo que sea fatal explícito.
+        // Si fue cancelación explícita o error fatal no reintentable, salir sin reintentar.
+        if (signal?.aborted) throw new Error('Operación cancelada')
         lastError = error as Error
         if (error instanceof DiscordApiError && !error.retryable) throw error
         if (attempt < maxRetries - 1) await this.sleep(this.retryDelay(null, attempt))
@@ -425,5 +529,6 @@ export class DiscordClient {
     this.rateLimiter.clearQueue()
     this.userCache.clear()
     this.channelCache.clear()
+    this.guildCache.clear()
   }
 }

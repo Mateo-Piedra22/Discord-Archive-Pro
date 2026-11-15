@@ -30,6 +30,14 @@ export class CacheManager {
       for (const embed of msg.embeds) {
         hash.update(JSON.stringify(embed))
       }
+      if (msg.reactions?.length) {
+        hash.update('reactions:')
+        hash.update(JSON.stringify(msg.reactions))
+      }
+      if (msg.sticker_items?.length) {
+        hash.update('stickers:')
+        hash.update(JSON.stringify(msg.sticker_items))
+      }
     }
     return hash.digest('hex')
   }
@@ -39,6 +47,14 @@ export class CacheManager {
     hash.update(message.content || '')
     hash.update(message.edited_timestamp || '')
     if (message.embeds?.length) hash.update(JSON.stringify(message.embeds))
+    if (message.reactions?.length) {
+      hash.update('reactions:')
+      hash.update(JSON.stringify(message.reactions))
+    }
+    if (message.sticker_items?.length) {
+      hash.update('stickers:')
+      hash.update(JSON.stringify(message.sticker_items))
+    }
     return hash.digest('hex')
   }
 
@@ -93,7 +109,6 @@ export class CacheManager {
     totalSize: number
   ): void {
     const now = new Date().toISOString()
-    const existing = getCachedPost(thread.id)
 
     let fileCount = 0
     for (const msg of messages) {
@@ -103,33 +118,38 @@ export class CacheManager {
       }
     }
 
-    upsertCachedPost({
-      thread_id: thread.id,
-      guild_id: thread.guild_id,
-      channel_id: thread.parent_id,
-      title: thread.name,
-      author_id: thread.owner_id,
-      created_at: thread.created_timestamp,
-      last_message_id: thread.last_message_id || messages[messages.length - 1]?.id || '',
-      message_count: messages.length,
-      content_hash: CacheManager.computeContentHash(messages),
-      metadata_hash: CacheManager.computeMetadataHash(thread),
-      first_synced: existing?.first_synced || now,
-      last_synced: now,
-      last_checked: now,
-      sync_status: 'synced',
-      download_path: downloadPath,
-      file_count: fileCount,
-      total_size: totalSize
-    })
+    const contentHash = CacheManager.computeContentHash(messages)
+    const metadataHash = CacheManager.computeMetadataHash(thread)
 
     runInTransaction(() => {
+      const existing = getCachedPost(thread.id)
+
+      upsertCachedPost({
+        thread_id: thread.id,
+        guild_id: thread.guild_id,
+        channel_id: thread.parent_id,
+        title: thread.name,
+        author_id: thread.owner_id,
+        created_at: thread.created_timestamp,
+        last_message_id: thread.last_message_id || messages[messages.length - 1]?.id || '',
+        message_count: messages.length,
+        content_hash: contentHash,
+        metadata_hash: metadataHash,
+        first_synced: existing?.first_synced || now,
+        last_synced: now,
+        last_checked: now,
+        sync_status: 'synced',
+        download_path: downloadPath,
+        file_count: fileCount,
+        total_size: totalSize
+      })
+
       for (const msg of messages) {
         if (msg.author) upsertCachedUser(msg.author)
         upsertCachedMessage({
           message_id: msg.id,
           thread_id: thread.id,
-          author_id: msg.author.id,
+          author_id: msg.author?.id || '',
           content_hash: CacheManager.computeMessageHash(msg),
           attachment_hash: CacheManager.computeAttachmentHash(msg),
           edited_at: msg.edited_timestamp,

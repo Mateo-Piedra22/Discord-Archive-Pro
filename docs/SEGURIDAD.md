@@ -58,30 +58,55 @@ archive://local/<ruta absoluta codificada>
 
 El handler:
 
-1. Decodifica la ruta.
-2. Comprueba `isInside(outputDirectory, ruta)` con `path.relative`
-   (rechaza `..`, rutas absolutas ajenas y prefijos engañosos como
-   `C:/archivo-secreto` cuando la raíz es `C:/archivo`).
-3. Comprueba que exista y sea un archivo.
-4. Sirve el contenido con `net.fetch(pathToFileURL(...))`.
+1. Decodifica la ruta tras `archive://local/`.
+2. Comprueba `await isInsideRealAsync(outputDirectory, ruta)` (`src/main/path-guard.ts`),
+   que resuelve los enlaces simbólicos mediante `fs.promises.realpath` (cacheando el
+   `realpath` de la carpeta raíz con TTL acotado) y rechaza `..`, rutas absolutas ajenas,
+   prefijos engañosos (`C:/archivo-secreto` cuando la raíz es `C:/archivo`) y symlinks
+   que apunten fuera de la carpeta de salida devolviendo **HTTP 403**.
+3. Comprueba con `fs.promises.stat` que el recurso exista y sea un archivo regular (404
+   en caso contrario).
+4. Sirve el contenido con `net.fetch(pathToFileURL(...).href)`.
 5. Añade una **CSP estricta** a la respuesta:
-   `default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'`.
+   `default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' archive:`.
 
-La misma comprobación se aplica a `archive:scan-directory` y `archive:read-file`.
-`folder:open` y `folder:reveal` también validan que la ruta esté dentro de la
-carpeta de salida.
+`archive:read-file` (lectura asíncrona mediante `fs.promises.open` con tope de 4 MB)
+valida igualmente con `await isInsideRealAsync(outputDirectory, ruta)`, mientras que
+`archive:scan-directory` valida con `isInsideReal` y omite explícitamente
+`entry.isSymbolicLink()`. `folder:open` y `folder:reveal` validan que el destino
+coincida con la raíz de salida o pase `isInsideReal(outputDirectory, ruta)` (y la app
+nunca invoca `shell.openPath` de forma automática al finalizar descargas: las abre en el
+visor integrado).
 
-Los tests de `src/main/path-guard.test.ts` fijan ese comportamiento.
+Los tests de `src/main/path-guard.test.ts` fijan el comportamiento de `isInside`,
+`isInsideReal`, `isInsideRealAsync` y `clearRealpathCache`.
 
 ### 3. Contenido archivado
 
-- HTML: se abre en `<iframe sandbox="">` (sin scripts, sin same-origin) y con
-  `referrerPolicy="no-referrer"`.
-- El HTML exportado por la app funciona **sin JavaScript**: el cambio de tema es un
-  checkbox con selector CSS.
-- Markdown: `react-markdown` con `rehype-raw` **no** ejecuta scripts; las URLs
-  relativas se reescriben a `archive://` y el resto se deja tal cual.
-- El visor de JSON no evalúa nada.
+- **HTML**: se muestra en `<iframe sandbox="">` (sin scripts ni same-origin) con
+  `referrerPolicy="no-referrer"` y la CSP de `archive://`. El HTML exportado por Estrato
+  funciona además **sin JavaScript**: el cambio de tema es un checkbox con selector CSS.
+- **Markdown**: `react-markdown` con `remark-gfm` y `rehype-raw` **no** ejecuta scripts
+  (la CSP de producción bloquea scripts inline/externos); las rutas relativas de medios
+  se reescriben a `archive://`.
+- **JSON**: se analiza con `JSON.parse` estándar sobre texto local (límite de lectura de
+  4 MB en `archive:read-file`), sin `eval` ni inyección dinámica; la **Vista tarjetas**
+  (`extractJsonThreadMessages`) proyecta campos de texto como nodos React escapados.
+- **CSV**: `JsonExporter.exportCsv` (`src/core/export/json-exporter.ts`) neutraliza prefijos
+  peligrosos (`=`, `+`, `@`, `\t` y `-` no numérico) mediante `sanitizeCsvFormula` con
+  comillas RFC 4180 y BOM UTF-8; la copia CSV del historial en `DownloadsView.tsx` y el
+  botón **Copiar vista filtrada** en `ArchiveViewer.tsx` (`formatCsvRows`) escapan
+  campos según RFC 4180. El visor tabular integrado procesa el CSV en memoria como texto
+  plano sin ejecutar fórmulas ni HTML.
+- **Activos SVG e invariantes Electron auditados**: `scripts/verify-release.mjs`
+  ejecuta `validateElectronSecurityConfig` sobre `src/main/index.ts` (exigiendo
+  `nodeIntegration: false`, `contextIsolation: true`, `sandbox: true` y `webSecurity: true`,
+  y bloqueando configuraciones inseguras) y `validateSvgContent` sobre
+  `resources/logo-mark.svg` y `resources/logo-banner.svg` en cada ejecución de
+  `npm run verify:release` y en CI/CD, rechazando cualquier etiqueta `<script>`,
+  atributos de evento `on*=`, URI `javascript:` o referencias `http://` / `https://`
+  ajenas a los namespaces estándar XML (`http://www.w3.org/2000/svg`,
+  `http://www.w3.org/1999/xlink`, `http://www.w3.org/XML/1998/namespace`).
 
 ### 4. CSP de la ventana (producción)
 
@@ -94,7 +119,7 @@ script-src 'self';
 style-src 'self' 'unsafe-inline';
 img-src 'self' data: https://cdn.discordapp.com https://media.discordapp.net archive:;
 font-src 'self' data:;
-media-src 'self' archive:;
+media-src 'self' archive: https://cdn.discordapp.com https://media.discordapp.net;
 connect-src 'self' https://discord.com;
 frame-src archive:;
 object-src 'none';
@@ -115,7 +140,7 @@ En desarrollo se omite porque Vite necesita scripts inline y el websocket de HMR
   micrófono, geolocalización, portapapeles, notificaciones web, etc.
 - `setAppUserModelId` para que las notificaciones nativas se agrupen correctamente.
 - Los enlaces del visor en vivo y de los embeds no navegan el renderer: se pasan a
-  `app.openExternal`, que solo admite destinos de Discord (apartado 9).
+  `app:open-external`, que solo admite destinos permitidos en lista blanca (apartado 9).
 
 ### 6. Token
 
@@ -146,8 +171,9 @@ Es la función más invasiva del producto, así que conviene ser explícito:
 - `cache:clear` se rechaza si hay descargas activas.
 - No existe ningún canal que acepte una ruta y devuelva contenido fuera del
   directorio de salida.
-- `app:get-stats` no recibe parámetros: el main agrega la base y el directorio de
-  salida que él mismo conoce.
+- `app:get-stats`, `app:get-perf-stats`, `app:optimize-memory` y
+  `cache:verify-integrity` no aceptan rutas del renderer: el proceso principal consulta
+  únicamente `estrato.db`, el estado en memoria y la carpeta `outputDir()` configurada.
 
 ### 9. Lectura en vivo, búsqueda y enlaces
 
@@ -155,14 +181,19 @@ Es la función más invasiva del producto, así que conviene ser explícito:
 `GET /channels/{id}/messages`. No escribe en disco, no encola descargas y no toca la
 caché: lo único que persiste es lo que ya estaba archivado.
 
-**La búsqueda no acepta rutas.** `archive:search` recibe solo el término y el
-límite; la raíz la pone el main (`outputDir()`), nunca el renderer. Recorre `.md`,
-`.txt`, `.html`, `.json` y `.csv`, ignora `assets/` y los directorios ocultos, y
-corta a 4 000 archivos y 2 MB por archivo. Los resultados traen la ruta absoluta
-solo para que la interfaz pueda pedir `settings.openFolder`, que vuelve a validar
-con `isInside`.
+**La búsqueda no acepta rutas.** `archive:search` recibe solo la consulta y el límite;
+la raíz la fija el main (`outputDir()`), nunca el renderer. Recorre `.md`, `.txt`,
+`.html`, `.htm`, `.json`, `.csv`, `.log`, `.xml`, `.yml`, `.yaml`, `.sql`, `.css`,
+`.js`, `.ts`, `.py`, `.sh`, `.ini` y `.toml` (incluyendo archivos de texto, código y
+datos dentro de `assets/`), omite `entry.isSymbolicLink()` y los directorios ocultos
+(`.`), y corta a 4 000 archivos, profundidad 12 y 2 MB por archivo (máximo 8
+coincidencias por archivo). Los resultados incluyen la ruta absoluta del archivo para que
+la interfaz pueda abrirlo en el visor integrado (`archive:read-file` / `archive://`) o
+pedir `folder:reveal`, ambos validados contra `outputDir()`.
 
-**Los enlaces externos van por lista blanca.** `app:open-external` solo abre:
+**Los enlaces externos van por lista blanca.** `app:open-external` valida cada URL con
+`new URL(url)` en `src/main/index.ts` y solo abre el esquema `discord:` o URLs `https:`
+cuyo `hostname` pertenezca exactamente al conjunto `hostsPermitidos`:
 
 ```
 discord://…
@@ -170,11 +201,17 @@ https://discord.com/…
 https://discordapp.com/…
 https://ptb.discord.com/…
 https://canary.discord.com/…
+https://www.youtube.com/…
+https://youtube.com/…
+https://youtu.be/…
+https://vimeo.com/…
+https://player.vimeo.com/…
 ```
 
-Cualquier otro destino devuelve `false` y no se abre. La comprobación es por prefijo
-de cadena **con barra final**, así que `https://discord.com.evil.tld` no pasa.
-Tampoco pasa `http://` sin TLS ni un `javascript:`.
+YouTube y Vimeo se incluyen porque sus reproductores embebidos rechazan el origen
+`file://` de Electron y deben abrirse en el navegador del sistema. Al validar el
+`hostname` exacto de `new URL(url)`, un host como `https://discord.com.evil.tld`, un
+esquema `http://` sin TLS o un `javascript:` quedan bloqueados (`false`).
 
 ---
 
@@ -187,24 +224,27 @@ Tampoco pasa `http://` sin TLS ni un `javascript:`.
 | Un adjunto descargado puede ser malware | Aceptado | No se ejecuta nada; se abre con la app del sistema bajo decisión del usuario. |
 | Rate limiting agresivo puede parecer un bloqueo | Aceptado | Preferible a que Discord banee la cuenta. |
 | `rehype-raw` permite HTML en Markdown | Mitigado | No ejecuta scripts; la CSP bloquea recursos externos. |
-| Un enlace simbólico dentro del archivo puede apuntar fuera | Aceptado | `isInside` valida la ruta, no el destino del enlace; el usuario tendría que crearlo él mismo dentro de su carpeta de salida. |
+| Un enlace simbólico dentro del archivo puede apuntar fuera | Mitigado | `isInsideReal` e `isInsideRealAsync` resuelven `realpath` en `archive://`, lectura y carpetas (devolviendo `403` si escapa de la raíz); escaneo y búsqueda omiten `isSymbolicLink()`. |
 
 ---
 
 ## Buenas prácticas para contribuir
 
-1. **Nunca** añadas un canal IPC que acepte una ruta sin validarla con `isInside`.
+1. **Nunca** añadas un canal IPC que acepte una ruta sin validarla con `isInside`,
+   `isInsideReal` o `isInsideRealAsync` (`src/main/path-guard.ts`).
 2. **Nunca** desactives `webSecurity`, `sandbox` o `contextIsolation` "temporalmente".
-3. Si necesitas mostrar contenido externo, hazlo en un `<iframe sandbox="">`.
+3. Si necesitas mostrar contenido externo o HTML archivado, hazlo en un `<iframe sandbox="">`.
 4. No añadas recursos remotos (fuentes, scripts, CDN) al renderer.
-5. Cualquier cambio en `path-guard.ts` requiere actualizar sus tests.
-6. No amplíes la lista blanca de `app:open-external` sin una razón escrita: es la
-   única vía por la que la app abre algo fuera de sí misma.
+5. Cualquier cambio en `path-guard.ts` requiere actualizar `src/main/path-guard.test.ts`.
+6. No amplíes `hostsPermitidos` en `app:open-external` sin una razón documentada:
+   es la única vía por la que la app abre destinos externos.
 7. Los comentarios y los textos de interfaz van **en español**.
 
 ---
 
 ## Reportar un problema
 
-Abre un issue describiendo: versión, sistema operativo, pasos para reproducir y el
-impacto. No incluyas tokens reales en el reporte.
+Consulta la política completa de reporte responsable en [SECURITY.md](../SECURITY.md) o
+usa la plantilla [bug_report.md](../.github/ISSUE_TEMPLATE/bug_report.md) indicando versión,
+sistema operativo, pasos para reproducir e impacto. **Nunca** adjuntes tokens reales,
+`data/preferences.json`, `data/estrato.db` ni exportaciones privadas.

@@ -1,7 +1,7 @@
 {
   "name": "estrato",
-  "version": "2.2.0",
-  "description": "Estrato — archivo vivo de comunidades de Discord",
+  "version": "2.5.0",
+  "description": "Estrato — Archivo vivo de comunidades de Discord en disco local (Markdown, HTML, JSON, CSV, PDF y EPUB)",
   "main": "./out/main/index.js",
   "author": "Estrato",
   "license": "SEE LICENSE IN LICENSE",
@@ -13,6 +13,8 @@
     "test": "vitest run",
     "icon": "node scripts/generate-icon.js",
     "package": "npm run build && electron-builder --win portable",
+    "package:installer": "npm run build && electron-builder --win nsis --publish never",
+    "verify:release": "node scripts/verify-release.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -48,12 +50,22 @@
   "build": {
     "appId": "com.estrato.app",
     "productName": "Estrato",
+    "copyright": "Copyright © 2026 Estrato",
+    "asar": true,
     "win": {
       "target": "portable",
       "icon": "resources/icon.ico"
     },
     "portable": {
       "artifactName": "Estrato.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Estrato-Setup-${version}.exe",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "shortcutName": "Estrato"
     },
     "directories": {
       "output": "dist",

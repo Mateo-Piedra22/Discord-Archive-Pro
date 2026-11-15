@@ -269,7 +269,7 @@
 }
 
 .btn--primary {
-  color: #1a1206;
+  color: var(--accent-contrast);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
@@ -450,7 +450,7 @@
 .checkbox--on {
   background: var(--accent);
   border-color: var(--accent);
-  color: #1a1206;
+  color: var(--accent-contrast);
 }
 
 /* Selector numérico */
@@ -637,6 +637,8 @@
   padding: 9px var(--sp-3);
   border-radius: var(--r-md);
   cursor: pointer;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
   transition: background var(--dur-fast) var(--ease);
 }
 
@@ -946,7 +948,7 @@
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  background: rgba(6, 7, 9, 0.78);
+  background: var(--scrim-bg);
   animation: aparecer var(--dur) var(--ease);
 }
 
@@ -1027,6 +1029,8 @@
   grid-template-columns: 36px 1fr;
   gap: var(--sp-3);
   padding: 5px var(--sp-5);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
   transition: background var(--dur-fast) var(--ease);
 }
 
@@ -2128,6 +2132,8 @@ pre.codigo code {
   background: var(--surface-1);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-lg);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
   transition: border-color var(--dur) var(--ease);
 }
 
@@ -2326,6 +2332,7 @@ pre.codigo code {
 }
 
 .visor__galeria {
+  flex: 1;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: var(--sp-2);
@@ -2337,12 +2344,22 @@ pre.codigo code {
 }
 
 .galeria__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   aspect-ratio: 1;
   overflow: hidden;
   border-radius: var(--r-md);
   border: 1px solid var(--line-soft);
   background: var(--surface-2);
   cursor: zoom-in;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.galeria__item:hover {
+  border-color: var(--accent-line);
 }
 
 .galeria__img {
@@ -2350,6 +2367,19 @@ pre.codigo code {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.galeria__item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--ink-950);
+}
+
+.galeria__item audio {
+  width: calc(100% - var(--sp-3));
+  max-width: 100%;
 }
 
 /* ==================== Archivo: árbol ==================== */
@@ -2429,3 +2459,443 @@ pre.codigo code {
   color: var(--fg-3);
   font-style: italic;
 }
+
+/* Sintaxis adicional de Discord en vivo: citas, subtexto, timestamps y lenguaje de bloque. */
+.msg__quote {
+  margin: 4px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--fg-2);
+}
+
+.msg__subtexto {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  line-height: 1.4;
+}
+
+.msg__h1,
+.msg__h2,
+.msg__h3 {
+  display: block;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 6px 0 2px;
+}
+
+.msg__h1 { font-size: var(--text-lg); }
+.msg__h2 { font-size: var(--text-md); }
+.msg__h3 { font-size: var(--text-base); }
+
+.msg__ts {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  font-size: 0.92em;
+  color: var(--fg-2);
+}
+
+.msg__codelang {
+  display: block;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-3);
+  margin-bottom: 4px;
+}
+
+/* Índice rápido y métricas de lectura del documento archivado. */
+.visor__meta-lectura {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.visor__toc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+
+.visor__toc-item {
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.visor__toc-item:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+/* Barra proporcional de consumo de memoria (heap / externo / resto RSS). */
+.barra-proporcion {
+  display: flex;
+  height: 8px;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-3);
+  border: 1px solid var(--line-soft);
+}
+
+.barra-proporcion__seg {
+  height: 100%;
+  transition: width var(--dur) var(--ease);
+}
+
+/* ============================================================
+   Visores integrados todo-en-uno (formatos, CSV, JSON y galería)
+   Todos los colores y radios provienen de tokens.css para mantener
+   consistencia en Tinta oscura, Papel claro y Pergamino sepia.
+   ============================================================ */
+
+/* Etiquetas compactas de formatos exportados dentro de las tarjetas. */
+.coleccion__formatos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.coleccion__formato-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+}
+
+/* Barra de selección de formatos exportados en la pestaña Documento. */
+.visor__formatos {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* Marco embebido para documentos PDF y HTML dentro del visor. */
+.visor__frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--surface-0);
+}
+
+/* Contenedor desplazable y tabla interactiva para archivos CSV. */
+.visor__csv {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-0);
+}
+
+.visor__csv-tabla {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.visor__csv-tabla thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line-soft);
+}
+
+.visor__csv-tabla thead th:not(:has(> button)) {
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.visor__csv-tabla thead th:last-child,
+.visor__csv-tabla tbody td:last-child {
+  border-right: 0;
+}
+
+.visor__csv-tabla thead th button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  text-align: left;
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.visor__csv-tabla thead th button:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.visor__csv-tabla tbody td {
+  padding: 7px var(--sp-3);
+  border-bottom: 1px solid var(--line-soft);
+  border-right: 1px solid var(--line-soft);
+  color: var(--fg-2);
+  max-width: 420px;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.visor__csv-tabla tbody tr:nth-child(even) td {
+  background: var(--surface-1);
+}
+
+.visor__csv-tabla tbody tr:hover td {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+/* Barra de métricas y filtro rápido en el visor JSON. */
+.visor__json-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+
+/* Barra de filtro rápido para imágenes, vídeos y audio en la galería. */
+.galeria__filtro {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* Mantiene legible el resaltado de sintaxis (vscDarkPlus) bajo temas claros y sepia. */
+:root[data-theme='light'] pre[style]:has(> code[class*='language-'][style]),
+:root[data-theme='sepia'] pre[style]:has(> code[class*='language-'][style]) {
+  background: #161a21 !important;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  margin: var(--sp-3) !important;
+}
+
+/* ============================================================
+   Controles de lectura avanzada, navegación de colecciones y
+   tarjetas visuales de JSON (Estrato v2.4)
+   ============================================================ */
+
+/* Resaltado en línea dentro de documentos y visores integrados. */
+.visor__mark {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* Barra compacta de lectura: buscador interno, ancho de columna y tipografía. */
+.visor__lectura-controles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+/* Controles compactos de navegación entre colecciones y selector de respuestas. */
+.visor__nav-coleccion {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+/* Rejilla y tarjetas legibles para la vista visual de exportaciones JSON. */
+.visor__json-cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-0);
+}
+
+.visor__json-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.visor__json-card:hover {
+  border-color: var(--line);
+}
+
+.visor__json-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.visor__json-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.visor__json-card-body {
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================
+   Acciones en notificaciones toast y ficha técnica de binarios
+   (Estrato v2.5 · Flujo 100 % in-app)
+   ============================================================ */
+
+.toast__action {
+  margin-left: var(--sp-2);
+  height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-fg);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  border-radius: var(--r-sm);
+  flex-shrink: 0;
+}
+
+.toast__action:hover:not(:disabled) {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.visor__binario-ficha {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  margin: var(--sp-2) 0;
+  background: var(--surface-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  text-align: left;
+}
+
+.visor__binario-fila {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--text-sm);
+}
+
+.visor__binario-fila:last-child {
+  border-bottom: 0;
+}
+
+.visor__binario-etiqueta {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+
+.visor__binario-valor {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+

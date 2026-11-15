@@ -36,6 +36,10 @@ export interface DbStats {
   totalFiles: number
   totalSize: number
   queuePending: number
+  /** Tamaño actual del archivo WAL de SQLite en bytes. */
+  walSizeBytes?: number
+  /** Tamaño actual del archivo principal SQLite en bytes. */
+  dbSizeBytes?: number
 }
 
 export interface RateLimiterBucket {
@@ -106,6 +110,44 @@ export interface SearchResult {
   hits: SearchHit[]
   scanned: number
   truncated: boolean
+  /** Duración total del escaneo en milisegundos. */
+  durationMs?: number
+}
+
+/** Telemetría en vivo de memoria, CPU, cachés LRU y estado de SQLite. */
+export interface ProcessPerfStats {
+  rssBytes: number
+  heapUsedBytes: number
+  heapTotalBytes: number
+  externalBytes: number
+  systemFreeBytes: number
+  systemTotalBytes: number
+  cpuPercent: number
+  uptimeSeconds: number
+  caches: {
+    usersSize: number
+    usersCapacity: number
+    channelsSize: number
+    channelsCapacity: number
+  }
+  db: DbStats
+}
+
+/** Resultado de la acción de optimización de memoria y caché. */
+export interface MemoryOptimizeResult {
+  heapBeforeBytes: number
+  heapAfterBytes: number
+  walBeforeBytes: number
+  walAfterBytes: number
+  cachesCleared: number
+}
+
+/** Resultado de la verificación y reparación de integridad de la caché. */
+export interface CacheIntegrityResult {
+  checkedFiles: number
+  invalidatedFiles: number
+  orphanPosts: number
+  integrityOk: boolean
 }
 
 export interface ArchiveStats {
@@ -114,7 +156,13 @@ export interface ArchiveStats {
   files: number
   bytes: number
   servers: { name: string; posts: number; bytes: number }[]
-  recent: { threadName: string; status: string; completedAt: string | null; bytes: number }[]
+  recent: {
+    threadName: string
+    status: string
+    completedAt: string | null
+    bytes: number
+    downloadPath?: string | null
+  }[]
 }
 
 export interface AuthResult {
@@ -190,6 +238,7 @@ export interface AppApi {
     checkStatus: (threadId: string) => Promise<string>
     getCachedPosts: (channelId: string) => Promise<unknown[]>
     clear: () => Promise<SimpleResult>
+    verifyIntegrity: () => Promise<CacheIntegrityResult>
   }
 
   download: {
@@ -208,6 +257,8 @@ export interface AppApi {
     cancelAll: () => Promise<SimpleResult>
     clearCompleted: () => Promise<SimpleResult>
     retry: (taskId: string) => Promise<SimpleResult>
+    retryAllFailed: () => Promise<{ count: number }>
+    removeTask: (taskId: string) => Promise<{ success: boolean }>
     setConcurrency: (n: number) => Promise<SimpleResult>
     onTaskStarted: (cb: (task: DownloadTask) => void) => Unsubscribe
     onTaskProgress: (cb: (taskId: string, progress: DownloadTask['progress']) => void) => Unsubscribe
@@ -243,6 +294,10 @@ export interface AppApi {
   app: {
     /** Métricas agregadas del archivo local. */
     getStats: () => Promise<ArchiveStats>
+    /** Telemetría en vivo de memoria, CPU y cachés del proceso principal. */
+    getPerfStats: () => Promise<ProcessPerfStats>
+    /** Ejecuta limpieza de caché LRU, checkpoint WAL y liberación de memoria SQLite. */
+    optimizeMemory: () => Promise<MemoryOptimizeResult>
     /**
      * Abre un enlace externo en el navegador o en el cliente de Discord.
      * Solo se permiten dominios de Discord (https o esquema discord:).

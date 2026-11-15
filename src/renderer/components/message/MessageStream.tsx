@@ -27,6 +27,7 @@ import {
   renderizarMarkdown
 } from './discordMarkdown'
 import MediaLightbox from './MediaLightbox'
+import type { ElementoLightbox } from './MediaLightbox'
 
 export interface MessageStreamProps {
   mensajes: DiscordMessage[]
@@ -40,6 +41,7 @@ type TipoMedia = 'imagen' | 'video'
 interface MediaAmpliado {
   url: string
   tipo: TipoMedia
+  indiceInicial?: number
 }
 
 /** Ventana de agrupación de mensajes consecutivos del mismo autor. */
@@ -48,6 +50,17 @@ const VENTANA_AGRUPACION_MS = 5 * 60 * 1000
 const EXTENSIONES_IMAGEN = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif']
 const EXTENSIONES_VIDEO = ['mp4', 'webm', 'mov', 'm4v', 'mkv']
 const EXTENSIONES_AUDIO = ['mp3', 'ogg', 'oga', 'wav', 'm4a', 'flac']
+const RE_VIDEO_DIRECTO = /\.(mp4|webm|ogg|mov)(\?|#|$)/i
+const RE_PROVEEDOR_VIDEO = /youtube(-nocookie)?\.com|youtu\.be|vimeo\.com/i
+
+function urlImagenDeEmbed(embed: DiscordEmbed): string | null {
+  if (embed.type === 'gifv' || embed.type === 'video') {
+    const url = embed.video?.url ?? ''
+    if (RE_VIDEO_DIRECTO.test(url) || RE_PROVEEDOR_VIDEO.test(url)) return null
+    return embed.thumbnail?.url ?? null
+  }
+  return embed.image?.url ?? null
+}
 
 function extensionDe(nombre: string): string {
   const punto = nombre.lastIndexOf('.')
@@ -271,7 +284,7 @@ function TarjetaEmbed({
     // Solo los archivos directos se pueden reproducir con <video>. Discord
     // entrega YouTube como `type: video` con una URL de su reproductor:
     // meterla en <video> daba error 4 y un hueco negro.
-    const esArchivoDirecto = /\.(mp4|webm|ogg|mov)(\?|#|$)/i.test(url)
+    const esArchivoDirecto = RE_VIDEO_DIRECTO.test(url)
 
     if (esArchivoDirecto) {
       return (
@@ -291,7 +304,7 @@ function TarjetaEmbed({
     // Proveedores con reproductor propio (YouTube, Vimeo): su política de
     // incrustación rechaza las peticiones que llegan desde `file://`, así que
     // se ofrece una vista previa honesta con el vídeo original a un clic.
-    if (/youtube(-nocookie)?\.com|youtu\.be|vimeo\.com/i.test(url)) {
+    if (RE_PROVEEDOR_VIDEO.test(url)) {
       return (
         <button
           className="embed__proveedor-video"
@@ -534,7 +547,7 @@ const Mensaje = memo(function Mensaje({
   const vacio = !mensaje.content && adjuntos.length === 0 && embeds.length === 0 && !evento
 
   return (
-    <div className={agrupado ? 'msg msg--agrupado' : 'msg'}>
+    <div id={`msg-${mensaje.id}`} className={agrupado ? 'msg msg--agrupado' : 'msg'}>
       {agrupado ? (
         <div />
       ) : avatar ? (
@@ -555,7 +568,26 @@ const Mensaje = memo(function Mensaje({
         )}
 
         {respuesta && (
-          <div className="msg__respuesta">↳ @{nombreDeAutor(respuesta)}</div>
+          <button
+            type="button"
+            className="msg__respuesta"
+            style={{ textAlign: 'left', maxWidth: '100%' }}
+            onClick={() =>
+              document
+                .getElementById(`msg-${respuesta.id}`)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+            title={
+              respuesta.content
+                ? `Ir al mensaje de ${nombreDeAutor(respuesta)}: ${respuesta.content}`
+                : `Ir al mensaje de ${nombreDeAutor(respuesta)}`
+            }
+          >
+            ↳ @{nombreDeAutor(respuesta)}
+            {respuesta.content
+              ? ` — ${respuesta.content.slice(0, 72)}${respuesta.content.length > 72 ? '…' : ''}`
+              : ''}
+          </button>
         )}
 
         {evento ? (
@@ -604,9 +636,43 @@ export default function MessageStream({
 }: MessageStreamProps) {
   const [ampliado, setAmpliado] = useState<MediaAmpliado | null>(null)
 
-  const ampliar = useCallback((url: string, tipo: TipoMedia) => {
-    setAmpliado({ url, tipo })
-  }, [])
+  const galeriaMensajes = useMemo<ElementoLightbox[]>(() => {
+    const items: ElementoLightbox[] = []
+    const vistos = new Set<string>()
+    const agregar = (url: string, nombre?: string) => {
+      if (!url || vistos.has(url)) return
+      vistos.add(url)
+      items.push({ url, tipo: 'imagen', nombre: nombre || undefined })
+    }
+
+    for (const mensaje of mensajes) {
+      for (const adjunto of mensaje.attachments ?? []) {
+        if (esImagen(adjunto)) agregar(adjunto.url, adjunto.filename)
+      }
+      for (const embed of mensaje.embeds ?? []) {
+        const url = urlImagenDeEmbed(embed)
+        if (url) agregar(url, embed.title)
+      }
+    }
+
+    return items
+  }, [mensajes])
+
+  const ampliar = useCallback(
+    (url: string, tipo: TipoMedia) => {
+      if (tipo === 'imagen') {
+        const indice = galeriaMensajes.findIndex((item) => item.url === url)
+        setAmpliado({
+          url,
+          tipo,
+          indiceInicial: indice >= 0 ? indice : undefined
+        })
+        return
+      }
+      setAmpliado({ url, tipo })
+    },
+    [galeriaMensajes]
+  )
 
   const cerrarVisor = useCallback(() => setAmpliado(null), [])
 
@@ -655,7 +721,17 @@ export default function MessageStream({
       </div>
 
       {ampliado && (
-        <MediaLightbox url={ampliado.url} tipo={ampliado.tipo} onClose={cerrarVisor} />
+        <MediaLightbox
+          url={ampliado.url}
+          tipo={ampliado.tipo}
+          items={
+            ampliado.tipo === 'imagen' && ampliado.indiceInicial !== undefined
+              ? galeriaMensajes
+              : undefined
+          }
+          indiceInicial={ampliado.indiceInicial}
+          onClose={cerrarVisor}
+        />
       )}
     </>
   )
