@@ -273,7 +273,7 @@ Detalles importantes del empaquetado:
 
 ### Flujos y plantillas en `.github/`
 
-- **`.github/workflows/ci.yml`**: se ejecuta en `push` y `pull_request` sobre `main` (`ubuntu-latest`, Node 20, `npm ci --ignore-scripts`). Corre `npm run typecheck`, `npm test -- --run`, `npm run build`, `npm run verify:release` y publica resumen con el estado de recursos en `$GITHUB_STEP_SUMMARY`.
+- **`.github/workflows/ci.yml`**: se ejecuta en `push` y `pull_request` sobre `main` (`ubuntu-latest`, Node 22, `npm ci --ignore-scripts`). Corre `npm run typecheck`, `npm test -- --run`, `npm run build`, `npm run verify:release` y publica resumen con el estado de recursos en `$GITHUB_STEP_SUMMARY`.
 - **`.github/workflows/empaquetar.yml`**: en `windows-latest`, mediante `workflow_dispatch` (input `objetivo`: `portable`, `nsis` o `ambos`) o automáticamente al publicar una etiqueta `v*` (construye ambos objetivos). Corre tipos, tests, build, `npm run verify:release`, `electron-builder`, `node scripts/verify-release.mjs --dist`, sube `dist/*.exe` + `dist/SHA256SUMS.txt` y crea/actualiza la Release en GitHub en tags `v*`.
 - **Plantillas comunitarias**:
   - `.github/ISSUE_TEMPLATE/config.yml` (`blank_issues_enabled: false` y enlaces directos a `SECURITY.md` y `docs/ARQUITECTURA.md`).

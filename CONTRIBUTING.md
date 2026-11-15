@@ -11,7 +11,7 @@ Para entrar en detalle técnico, apóyate en [docs/DESARROLLO.md](docs/DESARROLL
 ### Requisitos recomendados
 
 - **Sistema operativo:** Windows 10/11 (para ejecutar Electron completo, `better-sqlite3`, DPAPI en `safeStorage` y empaquetado portátil/instalador; la suite TypeScript, Vitest y `verify:release` también corren en Linux CI).
-- **Node.js:** v20 LTS (misma versión usada en CI en `.github/workflows/ci.yml`) y `npm`.
+- **Node.js:** v22 LTS (con soporte `node:sqlite` para pruebas; misma versión usada en CI en `.github/workflows/ci.yml`) y `npm`.
 
 ### Instalación y arranque
 
